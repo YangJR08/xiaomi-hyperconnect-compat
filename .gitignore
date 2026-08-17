@@ -1,0 +1,26 @@
+# Official installers and other large third-party packages
+*.exe
+*.msi
+*.msix
+
+# Local build and release output
+/build/
+/release/
+*.zip
+*.pdb
+*.obj
+*.o
+
+# Diagnostics and machine-specific state
+/logs/
+/backups/
+/exports/
+*.reg
+*.log
+*.tmp
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

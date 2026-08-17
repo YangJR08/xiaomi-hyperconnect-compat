@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "official_download_page": "https://hyperos.mi.com/continuity",
+  "snapshot_date": "2026-08-17",
+  "official_snapshot": {
+    "pc_manager": "5.8.1.121",
+    "xiaoai": "3.5.0.227"
+  },
+  "artifacts": {
+    "msimg32_proxy": {
+      "relative_path": "assets/bin/common/msimg32.dll",
+      "sha256": "1F51F24406D8689225B1A38166C5A4F54B5542C1465D1BE87B0F39E6AAD0937B",
+      "size": 15360,
+      "machine": "x64",
+      "signature_status": "NotSigned",
+      "role": "Forwards all public msimg32 exports to System32 and loads the sibling model hook"
+    },
+    "model_hook_tm2425": {
+      "relative_path": "assets/bin/common/wtsapi32.dll",
+      "sha256": "8938C3DA6EC67396B353A7B855BE7E706D3BAEEEB80726680A3BE58F60905772",
+      "size": 28160,
+      "machine": "x64",
+      "signature_status": "NotSigned",
+      "known_replaceable_sha256": [
+        "A505B40E92F65D7F373F58F1DC87114069451201AE34E5F64FB05FD2131001F5"
+      ],
+      "role": "Overrides the queried WMI baseboard identity with TIMI/TM2425"
+    },
+    "xiaoai_host_3_5_0_220": {
+      "relative_path": "assets/bin/legacy/xiaoai-3.5.0.220/XiaoaiHost.dll",
+      "sha256": "D80F3C3BAE5C028C02208C3B5148ED0F0965F25AF03DFAA135906E5F2A5A0194",
+      "size": 1200856,
+      "machine": "x64",
+      "signature_status": "HashMismatch",
+      "source_version": "3.5.0.220",
+      "original_sha256": "AB5961C45DEA2FF9C46019B3E8E5A88A26DFC745E7C57586B8EB4F2E8C4B9323",
+      "role": "Legacy, version-locked InfoChecker failure-path patch"
+    }
+  },
+  "products": {
+    "PcManager": {
+      "base_directory": "C:\\Program Files\\MI\\XiaomiPCManager",
+      "required_executables": ["XiaomiPcManager.exe"],
+      "runtime_artifacts": ["msimg32_proxy", "model_hook_tm2425"]
+    },
+    "Xiaoai": {
+      "base_directory": "C:\\Program Files\\MI\\XiaoaiAgent",
+      "required_executables": ["XiaoaiHost.exe", "app\\XiaoaiAgent.exe"],
+      "runtime_artifacts": ["model_hook_tm2425"],
+      "legacy_info_checker_version": "3.5.0.220"
+    }
+  }
+}
