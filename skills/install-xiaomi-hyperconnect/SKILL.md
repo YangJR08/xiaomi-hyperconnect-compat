@@ -1,56 +1,65 @@
 ---
 name: install-xiaomi-hyperconnect
-description: Install, diagnose, validate, and roll back the unofficial compatibility layer for Xiaomi PC Manager and Super XiaoAI on unsupported Windows PCs. Use when Codex needs to obtain Xiaomi HyperConnect software from Xiaomi's official site, handle an unsupported-device or unsupported-model dialog, place or verify msimg32.dll/wtsapi32.dll, apply the version-locked XiaoaiHost.dll 3.5.0.220 patch, or safely remove these changes.
+description: Install, diagnose, generate, validate, and roll back Xiaomi PC Manager and Super XiaoAI compatibility DLLs on unsupported Windows PCs. Use when an AI agent needs to obtain Xiaomi HyperConnect software from Xiaomi's official site, handle unsupported-device/model dialogs, safely place msimg32.dll or wtsapi32.dll, generate a custom TIMI/TMxxxx compatibility bundle, build the msimg32 proxy from source, apply the version-locked XiaoaiHost.dll 3.5.0.220 patch, or remove these changes.
 ---
 
-# Install Xiaomi HyperConnect
+# Install or Generate Xiaomi HyperConnect Compatibility
 
-Use only official Xiaomi installers and the bundled, hash-locked artifacts. Diagnose before changing the system, request approval before UAC, and preserve a verified rollback path.
+Use this Skill in one of two modes: install verified bundled files, or generate a user-requested compatibility bundle without installing it. Keep generation and system deployment as separate approvals.
 
-## Workflow
+## Route the request
 
-1. Read `references/technical-notes.md` when diagnosing a new version, a changed error, or an unexpected hash.
-2. Direct the user to `https://hyperos.mi.com/continuity`. Do not download installers from mirrors and do not redistribute Xiaomi installers.
-3. Inspect the local installer with `Get-AuthenticodeSignature`. Require `Valid` status and a signer subject containing `Xiaomi Communications Co., Ltd.`.
-4. Run `scripts/Prepare-OfficialInstaller.ps1` with `-WhatIf`, review the exact directory and hashes, then rerun without `-WhatIf`. Add `-Launch` only when the user wants the verified installer started.
-5. After installation, run `scripts/Install-RuntimeCompatibility.ps1 -WhatIf`. Explain that Program Files will be modified and that unsigned DLLs will be loaded. Request UAC approval before the real run.
-6. Run `scripts/Test-RuntimeCompatibility.ps1` and report product version, exact hashes, cached model when available, and responding processes. Do not copy raw logs containing account or authentication fields.
-7. If the user requests rollback, run `scripts/Remove-RuntimeCompatibility.ps1 -WhatIf` first, then the elevated real run. Restore only verified backups and remove only exact project hashes.
+- For installation or repair, follow **Install workflow**.
+- For a requested `TMxxxx` model DLL, follow **Generate workflow**.
+- For a clean rebuild of the generic proxy, follow **Build workflow**.
+- For a new Xiaomi version or unknown hash, read `references/technical-notes.md` and diagnose. Do not reuse the legacy host patch by assumption.
+
+## Install workflow
+
+1. Direct the user to `https://hyperos.mi.com/continuity`. Do not use mirrors or redistribute Xiaomi installers.
+2. Require a `Valid` Authenticode signature whose signer contains `Xiaomi Communications Co., Ltd.`.
+3. Run `scripts/Prepare-OfficialInstaller.ps1 -WhatIf`, review exact files, then run it for real. Add `-Launch` only when requested.
+4. After installation, run `scripts/Install-RuntimeCompatibility.ps1 -WhatIf`. Explain unsigned DLL loading, backups, Program Files changes, and UAC before the real run.
+5. Run `scripts/Test-RuntimeCompatibility.ps1`. Report version, hashes, cached model when available, and responding processes without exposing raw authentication-bearing logs.
+6. For rollback, preview `scripts/Remove-RuntimeCompatibility.ps1 -WhatIf`, then run elevated. Restore only verified backups.
+
+## Generate workflow
+
+1. Ask for or infer the exact six-character code matching `TM\d{4}`. Default to the bundled and tested `TM2425` only when the user has no model preference.
+2. Run:
+
+   ```powershell
+   pwsh -File '<skill-dir>\scripts\New-ModelCompatibilityBundle.ps1' -ModelCode TM2430 -OutputDirectory '<output-dir>'
+   ```
+
+3. Return the generated `msimg32.dll`, `wtsapi32.dll`, `SHA256SUMS.txt`, selected model code, and hashes. Do not install them unless the user separately requests installation.
+4. Explain that changing the model token does not guarantee the selected code is accepted by a future Xiaomi product version. Prefer a code from that installer's official support list.
+
+The generator uses the verified bundled TM2425 hook, requires exactly one UTF-16LE model token, preserves file length, refuses the Windows and Skill asset directories, and will not overwrite an unexpected output without `-Force`.
+
+## Build workflow
+
+Run the self-contained source build when the user wants a freshly compiled generic `msimg32.dll`:
+
+```powershell
+pwsh -File '<skill-dir>\scripts\Build-Msimg32Proxy.ps1' -OutputDirectory '<output-dir>'
+```
+
+Require an x64 GCC toolchain such as MSYS2 UCRT64. The script compiles the proxy and smoke test, copies the verified hook, validates all five exports, and reports hashes. A new build can differ byte-for-byte from the released proxy because of linker metadata.
 
 ## Product routing
 
-- For Xiaomi PC Manager, prepare the installer with both common DLLs. Install the runtime pair into the detected version directory.
-- For Super XiaoAI, prepare the installer with both common DLLs. Install only `wtsapi32.dll` into the detected version root and its `app` subdirectory.
+- Xiaomi PC Manager installer: use both common DLLs. Runtime: put both in the selected version directory.
+- Super XiaoAI installer: use both common DLLs. Runtime: put only `wtsapi32.dll` in the version root and `app` subdirectory.
 - Never put `msimg32.dll` into the Super XiaoAI runtime directory.
-- Apply `-EnableLegacyInfoCheckerPatch` only for Super XiaoAI 3.5.0.220 when the target `XiaoaiHost.dll` matches the manifest's original hash. Never force this patch on 3.5.0.227 or any unknown version.
+- Apply `-EnableLegacyInfoCheckerPatch` only for 3.5.0.220 with the manifest's exact original `XiaoaiHost.dll` hash. Never force it onto 3.5.0.227 or an unknown version.
 
 ## Safety rules
 
-- Treat the artifact manifest as authoritative. Stop on a size, hash, signature, destination, or version mismatch.
-- Do not write to `C:\Windows`, alter SMBIOS globally, disable Windows security, or weaken DLL policies.
-- Do not assume unsupported hardware-control features are safe. Recommend device-interconnection functions only.
-- Do not silently accept UAC, overwrite unknown files, or delete unverified files.
-- Keep backups under `%ProgramData%\XiaomiHyperConnectCompat`; never publish those backups or raw client logs.
-- Re-diagnose after every Xiaomi update because version directories and checks may change.
+- Treat the manifest as authoritative. Stop on a size, hash, signature, destination, or version mismatch.
+- Never write to `C:\Windows`, alter SMBIOS globally, disable security controls, or overwrite unknown files.
+- Do not silently accept UAC. Limit advice on unsupported hardware to device-interconnection features.
+- Keep backups under `%ProgramData%\XiaomiHyperConnectCompat`; never publish them or raw client logs.
+- Re-diagnose after Xiaomi updates.
 
-## Commands
-
-Prepare an installer:
-
-```powershell
-pwsh -File '<skill-dir>\scripts\Prepare-OfficialInstaller.ps1' -Product PcManager -InstallerPath 'D:\path\official.exe' -WhatIf
-```
-
-Install runtime compatibility from an elevated PowerShell 7 terminal:
-
-```powershell
-pwsh -File '<skill-dir>\scripts\Install-RuntimeCompatibility.ps1' -Product Xiaoai -WhatIf
-```
-
-Validate:
-
-```powershell
-pwsh -File '<skill-dir>\scripts\Test-RuntimeCompatibility.ps1' -Product Xiaoai -AsJson
-```
-
-Resolve `<skill-dir>` to this Skill directory. Use the bundled scripts instead of recreating deployment logic. Patch them only when adding a newly analyzed, explicitly supported version with new hashes and rollback tests.
+Use the bundled scripts rather than recreating fragile byte-patching or deployment logic.

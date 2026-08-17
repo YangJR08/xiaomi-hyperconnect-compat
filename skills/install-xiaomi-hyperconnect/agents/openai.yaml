@@ -1,4 +1,4 @@
 interface:
-  display_name: "小米跨端智联兼容安装"
-  short_description: "从小米官网下载、安装并安全管理电脑管家和超级小爱兼容层"
-  default_prompt: "Use $install-xiaomi-hyperconnect to install Xiaomi HyperConnect software from the official website and safely diagnose or manage its compatibility layer."
+  display_name: "小米跨端智联安装与 DLL 生成"
+  short_description: "让 AI 从官网安装、诊断或生成指定机型的小米兼容 DLL"
+  default_prompt: "Use $install-xiaomi-hyperconnect to install Xiaomi HyperConnect software from the official site or generate a custom TMxxxx compatibility DLL bundle."

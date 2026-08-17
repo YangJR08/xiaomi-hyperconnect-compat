@@ -31,6 +31,32 @@ function Get-PeMachine([string]$Path) {
 }
 
 $skillRoot = Join-Path $repoRoot 'skills\install-xiaomi-hyperconnect'
+$agentsPath = Join-Path $repoRoot 'AGENTS.md'
+if (-not (Test-Path -LiteralPath $agentsPath -PathType Leaf)) {
+    throw 'Missing root AGENTS.md for AI agent discovery.'
+}
+if ((Get-Content -LiteralPath $agentsPath -Raw) -notmatch 'skills/install-xiaomi-hyperconnect/SKILL\.md') {
+    throw 'AGENTS.md does not route agents to the Xiaomi compatibility Skill.'
+}
+
+$proxySourceFiles = @('msimg32_proxy.c', 'msimg32_proxy.def', 'proxy_smoke_test.c')
+foreach ($sourceName in $proxySourceFiles) {
+    $rootSource = if ($sourceName -eq 'proxy_smoke_test.c') {
+        Join-Path $repoRoot "tests\$sourceName"
+    }
+    else {
+        Join-Path $repoRoot "src\msimg32-proxy\$sourceName"
+    }
+    $skillSource = Join-Path $skillRoot "assets\source\msimg32-proxy\$sourceName"
+    if (-not (Test-Path -LiteralPath $skillSource -PathType Leaf)) {
+        throw "Missing self-contained Skill source: $skillSource"
+    }
+    if ((Get-FileHash -LiteralPath $rootSource -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $skillSource -Algorithm SHA256).Hash) {
+        throw "Root and Skill proxy sources differ: $sourceName"
+    }
+}
+
 $artifactResults = foreach ($entry in $manifest.artifacts.PSObject.Properties) {
     $artifact = $entry.Value
     $path = Join-Path $skillRoot ([string]$artifact.relative_path)
@@ -79,6 +105,27 @@ foreach ($scriptFile in $scriptFiles) {
     if ($errors) { throw "PowerShell parse error in $($scriptFile.FullName): $($errors.Message -join '; ')" }
 }
 
+$generationScript = Join-Path $skillRoot 'scripts\New-ModelCompatibilityBundle.ps1'
+$generatedTestDirectory = Join-Path $repoRoot 'build\repository-test-TM2430'
+$generationResult = & $generationScript -ModelCode TM2430 -OutputDirectory $generatedTestDirectory
+$generatedProxy = Join-Path $generatedTestDirectory 'msimg32.dll'
+$generatedHook = Join-Path $generatedTestDirectory 'wtsapi32.dll'
+$generatedChecksums = Join-Path $generatedTestDirectory 'SHA256SUMS.txt'
+if ($generationResult.Status -ne 'Generated') { throw 'Custom model generation did not complete.' }
+if ((Get-FileHash -LiteralPath $generatedProxy -Algorithm SHA256).Hash -ne
+    [string]$manifest.artifacts.msimg32_proxy.sha256) {
+    throw 'Generated bundle proxy differs from the verified proxy.'
+}
+$generatedHookBytes = [IO.File]::ReadAllBytes($generatedHook)
+$generatedHookText = [Text.Encoding]::Unicode.GetString($generatedHookBytes)
+if ([regex]::Matches($generatedHookText, 'TM2430').Count -ne 1 -or
+    [regex]::Matches($generatedHookText, 'TM2425').Count -ne 0) {
+    throw 'Custom model generation did not perform the expected single token replacement.'
+}
+if (-not (Test-Path -LiteralPath $generatedChecksums -PathType Leaf)) {
+    throw 'Custom model generation did not produce SHA256SUMS.txt.'
+}
+
 if ($Online) {
     $response = Invoke-WebRequest -Uri ([string]$manifest.official_download_page) -MaximumRedirection 5
     if ($response.StatusCode -ne 200 -or $response.Content -notmatch 'Xiaomi HyperConnect') {
@@ -91,5 +138,6 @@ $artifactResults
     Status = 'Passed'
     Artifacts = $artifactResults.Count
     Scripts = $scriptFiles.Count
+    GeneratedModel = $generationResult.ModelCode
     OnlineCheck = [bool]$Online
 }
