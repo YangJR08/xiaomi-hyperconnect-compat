@@ -151,6 +151,19 @@ C:\Program Files\MI\XiaoaiAgent\<版本号>\app\
 
 本仓库包含一个自带脚本和兼容文件的 Skill：`install-xiaomi-hyperconnect`。
 
+先克隆仓库：
+
+```powershell
+git clone https://github.com/YangJR08/xiaomi-hyperconnect-compat.git
+Set-Location '.\xiaomi-hyperconnect-compat'
+```
+
+也可以在 Codex 中让 `$skill-installer` 从下面的 GitHub 目录安装：
+
+```text
+https://github.com/YangJR08/xiaomi-hyperconnect-compat/tree/main/skills/install-xiaomi-hyperconnect
+```
+
 将整个 Skill 目录复制到个人 Skills 目录：
 
 ```powershell
