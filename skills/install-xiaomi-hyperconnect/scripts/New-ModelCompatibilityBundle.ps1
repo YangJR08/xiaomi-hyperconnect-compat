@@ -4,6 +4,9 @@ param(
     [ValidatePattern('^TM\d{4}$')]
     [string]$ModelCode,
 
+    [ValidateSet('PcManager', 'Xiaoai')]
+    [string]$Product,
+
     [string]$OutputDirectory,
 
     [switch]$Force
@@ -14,7 +17,8 @@ $ErrorActionPreference = 'Stop'
 
 $ModelCode = $ModelCode.ToUpperInvariant()
 if (-not $OutputDirectory) {
-    $OutputDirectory = Join-Path (Get-Location) "generated\$ModelCode"
+    $directoryName = if ($Product) { "$Product-$ModelCode" } else { $ModelCode }
+    $OutputDirectory = Join-Path (Get-Location) "generated\$directoryName"
 }
 $resolvedOutput = [IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\')
 $assetRoot = [IO.Path]::GetFullPath((Join-Path $script:SkillRoot 'assets')).TrimEnd('\')
@@ -61,10 +65,26 @@ $customHash = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($c
 $proxyDestination = Join-Path $resolvedOutput 'msimg32.dll'
 $hookDestination = Join-Path $resolvedOutput 'wtsapi32.dll'
 $checksumPath = Join-Path $resolvedOutput 'SHA256SUMS.txt'
+$bundleManifestPath = if ($Product) { Join-Path $resolvedOutput 'BUNDLE.json' } else { $null }
+$bundleManifestText = if ($Product) {
+    ([ordered]@{
+        schema_version = 1
+        purpose = 'installer'
+        product = $Product
+        model_code = $ModelCode
+    } | ConvertTo-Json) + [Environment]::NewLine
+}
+$bundleManifestHash = if ($bundleManifestText) {
+    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData(
+        [Text.UTF8Encoding]::new($false).GetBytes($bundleManifestText)))
+}
 $expectedFiles = @(
     [pscustomobject]@{ Path = $proxyDestination; Hash = [string]$proxyArtifact.sha256 },
     [pscustomobject]@{ Path = $hookDestination; Hash = $customHash }
 )
+if ($bundleManifestPath) {
+    $expectedFiles += [pscustomobject]@{ Path = $bundleManifestPath; Hash = $bundleManifestHash }
+}
 
 foreach ($entry in $expectedFiles) {
     if (Test-Path -LiteralPath $entry.Path -PathType Leaf) {
@@ -79,6 +99,9 @@ if ($PSCmdlet.ShouldProcess($resolvedOutput, "Generate TIMI/$ModelCode compatibi
     New-Item -ItemType Directory -Path $resolvedOutput -Force | Out-Null
     Copy-Item -LiteralPath $proxySource -Destination $proxyDestination -Force
     [IO.File]::WriteAllBytes($hookDestination, $customBytes)
+    if ($bundleManifestPath) {
+        [IO.File]::WriteAllText($bundleManifestPath, $bundleManifestText, [Text.UTF8Encoding]::new($false))
+    }
 
     foreach ($entry in $expectedFiles) {
         if ((Get-Sha256 -Path $entry.Path) -ne $entry.Hash) {
@@ -86,17 +109,23 @@ if ($PSCmdlet.ShouldProcess($resolvedOutput, "Generate TIMI/$ModelCode compatibi
         }
     }
 
-    @(
+    $checksumLines = @(
         "$($proxyArtifact.sha256)  msimg32.dll",
         "$customHash  wtsapi32.dll"
-    ) | Set-Content -LiteralPath $checksumPath -Encoding utf8NoBOM
+    )
+    if ($bundleManifestPath) {
+        $checksumLines += "$bundleManifestHash  BUNDLE.json"
+    }
+    $checksumLines | Set-Content -LiteralPath $checksumPath -Encoding utf8NoBOM
 }
 
 [pscustomobject]@{
+    Product = $Product
     ModelCode = $ModelCode
     OutputDirectory = $resolvedOutput
     ProxySHA256 = [string]$proxyArtifact.sha256
     HookSHA256 = $customHash
+    BundleManifest = $bundleManifestPath
     Status = if ($WhatIfPreference) { 'WhatIf' } else { 'Generated' }
     Warning = 'The generated wtsapi32.dll is unsigned and should be used only with an explicitly selected supported TM model code.'
 }

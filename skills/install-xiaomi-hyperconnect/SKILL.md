@@ -18,24 +18,24 @@ Use this Skill in one of two modes: install verified bundled files, or generate 
 
 1. Direct the user to `https://hyperos.mi.com/continuity`. Do not use mirrors or redistribute Xiaomi installers.
 2. Require a `Valid` Authenticode signature whose signer contains `Xiaomi Communications Co., Ltd.`.
-3. Run `scripts/Prepare-OfficialInstaller.ps1 -WhatIf`, review exact files, then run it for real. Add `-Launch` only when requested.
+3. Run `scripts/Prepare-OfficialInstaller.ps1 -WhatIf`, review exact files, then run it for real. For a generated product bundle, pass its directory with `-BundleDirectory`; the script validates the deterministic model-token change, product metadata, and checksums before copying. Add `-Launch` only when requested.
 4. After installation, run `scripts/Install-RuntimeCompatibility.ps1 -WhatIf`. Explain unsigned DLL loading, backups, Program Files changes, and UAC before the real run.
 5. Run `scripts/Test-RuntimeCompatibility.ps1`. Report version, hashes, cached model when available, and responding processes without exposing raw authentication-bearing logs.
 6. For rollback, preview `scripts/Remove-RuntimeCompatibility.ps1 -WhatIf`, then run elevated. Restore only verified backups.
 
 ## Generate workflow
 
-1. Ask for or infer the exact six-character code matching `TM\d{4}`. Default to the bundled and tested `TM2425` only when the user has no model preference.
-2. Run:
+1. Prefer the currently validated product profiles: Xiaomi PC Manager uses `TM2425`; Super XiaoAI uses `TM2430`. To generate both under one output root, run:
 
    ```powershell
-   pwsh -File '<skill-dir>\scripts\New-ModelCompatibilityBundle.ps1' -ModelCode TM2430 -OutputDirectory '<output-dir>'
+   pwsh -File '<skill-dir>\scripts\New-ProductInstallerBundles.ps1' -OutputRoot '<output-root>'
    ```
 
-3. Return the generated `msimg32.dll`, `wtsapi32.dll`, `SHA256SUMS.txt`, selected model code, and hashes. Do not install them unless the user separately requests installation.
-4. Explain that changing the model token does not guarantee the selected code is accepted by a future Xiaomi product version. Prefer a code from that installer's official support list.
+2. For an explicitly requested custom six-character code matching `TM\d{4}`, run `New-ModelCompatibilityBundle.ps1` with `-Product`, `-ModelCode`, and a separate output directory. Do not replace either validated profile by inference.
+3. Return each bundle's `BUNDLE.json`, `msimg32.dll`, `wtsapi32.dll`, `SHA256SUMS.txt`, product, model code, and hashes. Do not install them unless the user separately requests installation. When authorized later, pass the selected product directory to `Prepare-OfficialInstaller.ps1 -BundleDirectory` instead of manually trusting its files.
+4. Explain that changing the model token does not guarantee it is accepted by another Xiaomi product or future version. Never mix the two product directories.
 
-The generator uses the verified bundled TM2425 hook, requires exactly one UTF-16LE model token, preserves file length, refuses the Windows and Skill asset directories, and will not overwrite an unexpected output without `-Force`.
+The generators use the verified bundled TM2425 hook, require exactly one UTF-16LE model token, preserve file length, refuse the Windows and Skill asset directories, and will not overwrite an unexpected output without `-Force`. Product metadata is included in `SHA256SUMS.txt`.
 
 ## Build workflow
 
@@ -49,10 +49,13 @@ Require an x64 GCC toolchain such as MSYS2 UCRT64. The script compiles the proxy
 
 ## Product routing
 
-- Xiaomi PC Manager installer: use both common DLLs. Runtime: put both in the selected version directory.
-- Super XiaoAI installer: use both common DLLs. Runtime: put only `wtsapi32.dll` in the version root and `app` subdirectory.
+- Xiaomi PC Manager installer: use both DLLs from the `PcManager/TM2425` installer bundle.
+- Super XiaoAI installer: use both DLLs from the `Xiaoai/TM2430` installer bundle.
+- Runtime deployment remains separately validated: PC Manager uses the manifest's common pair; Super XiaoAI uses only the manifest's `wtsapi32.dll` in the version root and `app` subdirectory. Do not infer runtime support from an installer bundle.
+- `Prepare-OfficialInstaller.ps1` must reject a bundle whose `BUNDLE.json` product differs from `-Product`.
 - Never put `msimg32.dll` into the Super XiaoAI runtime directory.
 - Apply `-EnableLegacyInfoCheckerPatch` only for 3.5.0.220 with the manifest's exact original `XiaoaiHost.dll` hash. Never force it onto 3.5.0.227 or an unknown version.
+- The patched legacy file is stored at `assets/bin/legacy/xiaoai-3.5.0.220/XiaoaiHost.dll`; it is not an installer-bundle file. Even for a human-driven install, use `Install-RuntimeCompatibility.ps1 -EnableLegacyInfoCheckerPatch` so the script verifies the original hash and creates the recoverable backup. Never instruct the user to copy it over the installed file manually.
 
 ## Safety rules
 

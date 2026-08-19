@@ -8,6 +8,9 @@ param(
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
     [string]$InstallerPath,
 
+    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
+    [string]$BundleDirectory,
+
     [switch]$Launch
 )
 
@@ -28,32 +31,55 @@ if (-not $signature.SignerCertificate -or
     throw "Installer is not signed by Xiaomi Communications Co., Ltd.: $($signature.SignerCertificate.Subject)"
 }
 
-$artifactNames = @('msimg32_proxy', 'model_hook_tm2425')
-$prepared = foreach ($artifactName in $artifactNames) {
-    $source = Assert-CompatArtifact -Name $artifactName
-    $artifact = Get-CompatArtifact -Name $artifactName
-    $fileName = if ($artifactName -eq 'msimg32_proxy') { 'msimg32.dll' } else { 'wtsapi32.dll' }
-    $destination = Join-Path $installer.DirectoryName $fileName
+$bundle = if ($BundleDirectory) {
+    Get-CompatGeneratedBundle -Directory $BundleDirectory
+}
+else {
+    $proxySource = Assert-CompatArtifact -Name 'msimg32_proxy'
+    $hookSource = Assert-CompatArtifact -Name 'model_hook_tm2425'
+    $proxyArtifact = Get-CompatArtifact -Name 'msimg32_proxy'
+    $hookArtifact = Get-CompatArtifact -Name 'model_hook_tm2425'
+    [pscustomobject]@{
+        Directory = $null
+        Product = $null
+        ModelCode = 'TM2425'
+        ProxyPath = $proxySource
+        ProxySHA256 = [string]$proxyArtifact.sha256
+        HookPath = $hookSource
+        HookSHA256 = [string]$hookArtifact.sha256
+        ChecksumPath = $null
+    }
+}
+if ($bundle.Product -and $bundle.Product -ne $Product) {
+    throw "Compatibility bundle is for $($bundle.Product), not $Product`: $($bundle.Directory)"
+}
+
+$bundleFiles = @(
+    [pscustomobject]@{ Name = 'msimg32.dll'; Source = $bundle.ProxyPath; SHA256 = $bundle.ProxySHA256 },
+    [pscustomobject]@{ Name = 'wtsapi32.dll'; Source = $bundle.HookPath; SHA256 = $bundle.HookSHA256 }
+)
+$prepared = foreach ($bundleFile in $bundleFiles) {
+    $destination = Join-Path $installer.DirectoryName $bundleFile.Name
 
     if (Test-Path -LiteralPath $destination -PathType Leaf) {
         $existingHash = Get-Sha256 -Path $destination
-        if ($existingHash -ne [string]$artifact.sha256) {
+        if ($existingHash -ne $bundleFile.SHA256) {
             throw "Refusing to overwrite an unexpected file beside the installer: $destination ($existingHash)"
         }
         [pscustomobject]@{ File = $destination; Status = 'AlreadyPrepared'; SHA256 = $existingHash }
         continue
     }
 
-    if ($PSCmdlet.ShouldProcess($destination, "Copy verified $artifactName")) {
-        Copy-Item -LiteralPath $source -Destination $destination
+    if ($PSCmdlet.ShouldProcess($destination, "Copy verified $($bundleFile.Name) for TIMI/$($bundle.ModelCode)")) {
+        Copy-Item -LiteralPath $bundleFile.Source -Destination $destination
         $installedHash = Get-Sha256 -Path $destination
-        if ($installedHash -ne [string]$artifact.sha256) {
+        if ($installedHash -ne $bundleFile.SHA256) {
             throw "Post-copy hash verification failed: $destination"
         }
         [pscustomobject]@{ File = $destination; Status = 'Prepared'; SHA256 = $installedHash }
     }
     else {
-        [pscustomobject]@{ File = $destination; Status = 'WhatIf'; SHA256 = [string]$artifact.sha256 }
+        [pscustomobject]@{ File = $destination; Status = 'WhatIf'; SHA256 = $bundleFile.SHA256 }
     }
 }
 
@@ -63,6 +89,9 @@ $prepared
     Product = $Product
     Signature = $signature.Status.ToString()
     Signer = $signature.SignerCertificate.Subject
+    ModelCode = $bundle.ModelCode
+    BundleProduct = $bundle.Product
+    BundleDirectory = $bundle.Directory
 }
 
 if ($Launch -and $PSCmdlet.ShouldProcess($installer.FullName, 'Launch verified Xiaomi installer')) {

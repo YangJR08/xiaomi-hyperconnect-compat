@@ -106,7 +106,12 @@ foreach ($scriptFile in $scriptFiles) {
 }
 
 $generationScript = Join-Path $skillRoot 'scripts\New-ModelCompatibilityBundle.ps1'
-$generatedTestDirectory = Join-Path $repoRoot 'build\repository-test-TM2430'
+$productGenerationScript = Join-Path $skillRoot 'scripts\New-ProductInstallerBundles.ps1'
+$commonScript = Join-Path $skillRoot 'scripts\Compatibility.Common.ps1'
+. $commonScript
+$repositoryTestRoot = Join-Path ([IO.Path]::GetTempPath()) "xiaomi-compat-repository-test-$([Guid]::NewGuid().ToString('N'))"
+try {
+$generatedTestDirectory = Join-Path $repositoryTestRoot 'generic-TM2430'
 $generationResult = & $generationScript -ModelCode TM2430 -OutputDirectory $generatedTestDirectory
 $generatedProxy = Join-Path $generatedTestDirectory 'msimg32.dll'
 $generatedHook = Join-Path $generatedTestDirectory 'wtsapi32.dll'
@@ -124,6 +129,106 @@ if ([regex]::Matches($generatedHookText, 'TM2430').Count -ne 1 -or
 }
 if (-not (Test-Path -LiteralPath $generatedChecksums -PathType Leaf)) {
     throw 'Custom model generation did not produce SHA256SUMS.txt.'
+}
+
+$validatedBundle = Get-CompatGeneratedBundle -Directory $generatedTestDirectory
+if ($validatedBundle.ModelCode -ne 'TM2430' -or
+    $validatedBundle.ProxySHA256 -ne [string]$manifest.artifacts.msimg32_proxy.sha256 -or
+    $validatedBundle.HookSHA256 -ne (Get-FileHash -LiteralPath $generatedHook -Algorithm SHA256).Hash) {
+    throw 'Generated bundle validation returned unexpected metadata.'
+}
+
+function Assert-BundleRejected {
+    param(
+        [Parameter(Mandatory)][string]$Directory,
+        [Parameter(Mandatory)][string]$ExpectedMessage
+    )
+
+    try {
+        $null = Get-CompatGeneratedBundle -Directory $Directory
+    }
+    catch {
+        if ($_.Exception.Message -notmatch $ExpectedMessage) {
+            throw "Bundle was rejected for an unexpected reason: $($_.Exception.Message)"
+        }
+        return
+    }
+    throw "Invalid compatibility bundle was accepted: $Directory"
+}
+
+$bundleTestRoot = Join-Path ([IO.Path]::GetTempPath()) "xiaomi-compat-bundle-test-$([Guid]::NewGuid().ToString('N'))"
+try {
+    $proxyTamperDirectory = Join-Path $bundleTestRoot 'proxy-tamper'
+    $hookTamperDirectory = Join-Path $bundleTestRoot 'hook-tamper'
+    $checksumTamperDirectory = Join-Path $bundleTestRoot 'checksum-tamper'
+    foreach ($directory in @($proxyTamperDirectory, $hookTamperDirectory, $checksumTamperDirectory)) {
+        Copy-Item -LiteralPath $generatedTestDirectory -Destination $directory -Recurse
+    }
+
+    $tamperedProxyPath = Join-Path $proxyTamperDirectory 'msimg32.dll'
+    $tamperedProxyBytes = [IO.File]::ReadAllBytes($tamperedProxyPath)
+    $tamperedProxyBytes[0] = $tamperedProxyBytes[0] -bxor 0x01
+    [IO.File]::WriteAllBytes($tamperedProxyPath, $tamperedProxyBytes)
+    Assert-BundleRejected -Directory $proxyTamperDirectory -ExpectedMessage 'proxy hash mismatch'
+
+    $tamperedHookPath = Join-Path $hookTamperDirectory 'wtsapi32.dll'
+    $tamperedHookBytes = [IO.File]::ReadAllBytes($tamperedHookPath)
+    $tamperedHookBytes[0] = $tamperedHookBytes[0] -bxor 0x01
+    [IO.File]::WriteAllBytes($tamperedHookPath, $tamperedHookBytes)
+    Assert-BundleRejected -Directory $hookTamperDirectory -ExpectedMessage 'differs from the verified base outside the model token'
+
+    $tamperedChecksumPath = Join-Path $checksumTamperDirectory 'SHA256SUMS.txt'
+    @(
+        "$($validatedBundle.ProxySHA256)  msimg32.dll",
+        "$($validatedBundle.ProxySHA256)  wtsapi32.dll"
+    ) | Set-Content -LiteralPath $tamperedChecksumPath -Encoding utf8NoBOM
+    Assert-BundleRejected -Directory $checksumTamperDirectory -ExpectedMessage 'does not match the bundle files'
+}
+finally {
+    if (Test-Path -LiteralPath $bundleTestRoot -PathType Container) {
+        Remove-Item -LiteralPath $bundleTestRoot -Recurse -Force
+    }
+}
+
+$productTestRoot = Join-Path $repositoryTestRoot 'products'
+$productGenerationResults = @(& $productGenerationScript -OutputRoot $productTestRoot)
+$expectedProductBundles = @(
+    [pscustomobject]@{ Product = 'PcManager'; ModelCode = 'TM2425'; Directory = 'XiaomiPCManager-TM2425' },
+    [pscustomobject]@{ Product = 'Xiaoai'; ModelCode = 'TM2430'; Directory = 'SuperXiaoAI-TM2430' }
+)
+if ($productGenerationResults.Count -ne $expectedProductBundles.Count) {
+    throw 'Product bundle generation returned an unexpected number of results.'
+}
+foreach ($expectedBundle in $expectedProductBundles) {
+    $productBundleDirectory = Join-Path $productTestRoot $expectedBundle.Directory
+    $productBundle = Get-CompatGeneratedBundle -Directory $productBundleDirectory
+    if ($productBundle.Product -ne $expectedBundle.Product -or
+        $productBundle.ModelCode -ne $expectedBundle.ModelCode -or
+        -not (Test-Path -LiteralPath $productBundle.BundleManifestPath -PathType Leaf)) {
+        throw "Product bundle metadata mismatch: $productBundleDirectory"
+    }
+}
+
+$metadataTamperRoot = Join-Path ([IO.Path]::GetTempPath()) "xiaomi-compat-metadata-test-$([Guid]::NewGuid().ToString('N'))"
+try {
+    Copy-Item -LiteralPath (Join-Path $productTestRoot 'XiaomiPCManager-TM2425') `
+        -Destination $metadataTamperRoot -Recurse
+    $metadataPath = Join-Path $metadataTamperRoot 'BUNDLE.json'
+    $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
+    $metadata.product = 'Xiaoai'
+    $metadata | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding utf8NoBOM
+    Assert-BundleRejected -Directory $metadataTamperRoot -ExpectedMessage 'does not match BUNDLE.json'
+}
+finally {
+    if (Test-Path -LiteralPath $metadataTamperRoot -PathType Container) {
+        Remove-Item -LiteralPath $metadataTamperRoot -Recurse -Force
+    }
+}
+}
+finally {
+    if (Test-Path -LiteralPath $repositoryTestRoot -PathType Container) {
+        Remove-Item -LiteralPath $repositoryTestRoot -Recurse -Force
+    }
 }
 
 if ($Online) {

@@ -9,13 +9,13 @@
 
 ### 方式一：下载 DLL，跟教程手动安装
 
-适合不使用 AI 的用户。前往 [Latest Release](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest) 下载：
+适合不使用 AI 的用户。前往 [Latest Release](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest)，根据要安装的软件只下载其中一套：
 
-- [`msimg32.dll`](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest/download/msimg32.dll)
-- [`wtsapi32.dll`](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest/download/wtsapi32.dll)
-- [`SHA256SUMS.txt`](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest/download/SHA256SUMS.txt)
+- [小米电脑管家 `TM2425` 安装器 bundle](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest/download/XiaomiPCManager-TM2425.zip)
+- [超级小爱 `TM2430` 安装器 bundle](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest/download/SuperXiaoAI-TM2430.zip)
+- [发布附件 SHA-256](https://github.com/YangJR08/xiaomi-hyperconnect-compat/releases/latest/download/SHA256SUMS.txt)
 
-然后按照下方的[手动安装教程](#手动安装教程)移动文件。默认发布的 `wtsapi32.dll` 会模拟 `TIMI / TM2425`，也是目前实际测试过的版本。
+解压所选 bundle，再按照下方的[手动安装教程](#手动安装教程)操作。两套文件只用于各自产品的安装器检查，不能混用；安装完成后的运行时部署仍以兼容清单和脚本校验结果为准。
 
 ### 方式二：把 Skill 交给 AI
 
@@ -29,7 +29,7 @@ skills/install-xiaomi-hyperconnect/
 
 - 从小米官网获取安装包并验证 Xiaomi 数字签名；
 - 准备安装器目录、安装运行时 DLL、验证结果和回滚；
-- 按指定的 `TMxxxx` 机型代码生成 `msimg32.dll + wtsapi32.dll`；
+- 一次生成电脑管家 `TM2425` 和超级小爱 `TM2430` 两套产品专用 bundle，或按指定 `TMxxxx` 生成高级自定义 bundle；
 - 从仓库内置源码重新编译 `msimg32.dll` 代理；
 - 区分电脑管家、超级小爱和仅限 3.5.0.220 的旧版补丁边界。
 
@@ -42,14 +42,14 @@ Codex 可以把该目录安装为个人 Skill 后用 `$install-xiaomi-hyperconne
 ```
 
 ```text
-使用 $install-xiaomi-hyperconnect，为 TIMI / TM2430 生成一套兼容 DLL，只生成到新目录，不要安装。
+使用 $install-xiaomi-hyperconnect，在 build 下生成电脑管家 TM2425 和超级小爱 TM2430 两套产品专用兼容 bundle，只生成，不要安装。
 ```
 
 不支持 Skill 的 AI 可以使用：
 
 ```text
 请先完整阅读 skills/install-xiaomi-hyperconnect/SKILL.md 和其中引用的资料，
-然后为 TIMI / TM2430 生成兼容 DLL。只写入 generated/TM2430，不要安装或改动系统目录。
+然后生成电脑管家 TM2425 和超级小爱 TM2430 两套产品专用兼容 bundle。只写入 build，不要安装或改动系统目录。
 ```
 
 ## 先从小米官网下载
@@ -72,132 +72,105 @@ Codex 可以把该目录安装为个人 Skill 后用 `$install-xiaomi-hyperconne
 | --- | --- | --- |
 | `msimg32.dll` | 转发系统图形接口并加载同目录的机型 Hook | 电脑管家/超级小爱安装器；电脑管家运行时 |
 | `wtsapi32.dll` | 将相关 WMI 主板查询结果覆盖为 `TIMI / TM2425`，也可生成其他等长 `TMxxxx` 版本 | 两款软件的安装与运行时 |
-| `XiaoaiHost.dll` | 屏蔽 3.5.0.220 的 `InfoCheckerService.OnFail()` 失败路径 | **只能用于超级小爱 3.5.0.220** |
+| [`XiaoaiHost.dll`](skills/install-xiaomi-hyperconnect/assets/bin/legacy/xiaoai-3.5.0.220/XiaoaiHost.dll) | 屏蔽 3.5.0.220 的 `InfoCheckerService.OnFail()` 失败路径 | **只能用于超级小爱 3.5.0.220，且只能通过校验脚本安装** |
 
 所有仓库内置发布文件的 SHA-256 见 [`checksums.sha256`](checksums.sha256)。
 
 ## 手动安装教程
 
-先完全退出相关进程，并核对 `SHA256SUMS.txt`。这些 DLL 只放在安装包或应用目录，**不要复制到 `C:\Windows`**。
+不需要 AI 也能完成。安装器旁的 DLL 可以手动放置；安装完成后的运行时文件和 `XiaoaiHost.dll` 补丁，为了校验版本、哈希和备份，需要由用户在管理员终端中运行仓库脚本。所有 DLL 都只能放在安装包或应用目录，**不要复制到 `C:\Windows`**。
 
-### 1. 绕过官方安装器的机型检查
+### 小米电脑管家
 
-将两个 DLL 放到小米官方安装包所在目录，再运行安装包：
+1. 新建一个只放电脑管家安装文件的目录。
+2. 将官方安装包以及下载并解压后的 `XiaomiPCManager-TM2425` 中的 `msimg32.dll`、`wtsapi32.dll` 放在同一目录；从源码生成时，对应目录是 `build\XiaomiPCManager-TM2425`。
+3. 运行官方安装包；安装完成并关闭安装器后，可删除安装包旁的两个 DLL。
+4. 完全退出电脑管家，把清单内 TM2425 的同一对运行时 DLL 放入实际版本目录：
+
+   ```text
+   C:\Program Files\MI\XiaomiPCManager\<版本号>\
+   ```
+
+   不要覆盖哈希未知的同名文件。软件升级创建新版本目录后需要重新检查。
+
+### 超级小爱 3.5.0.220：从安装到不再弹“组件加载异常”
+
+1. 新建一个只放超级小爱安装文件的目录。
+2. 将官方 3.5.0.220 安装包以及下载并解压后的 `SuperXiaoAI-TM2430` 中的 `msimg32.dll`、`wtsapi32.dll` 放在同一目录；从源码生成时，对应目录是 `build\SuperXiaoAI-TM2430`。
+3. 运行官方安装包。安装结束后完全退出超级小爱及其搜索栏；安装器旁的两个 DLL 可以删除。
+4. 不要把安装器 bundle 中的 TM2430 DLL 继续手动复制到运行目录，也不要直接覆盖 `XiaoaiHost.dll`。
+5. 以管理员身份打开 **PowerShell 7**，进入本仓库根目录，先预览安装后的全部运行时操作：
+
+   ```powershell
+   pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Install-RuntimeCompatibility.ps1' `
+     -Product Xiaoai `
+     -InstallRoot 'C:\Program Files\MI\XiaoaiAgent\3.5.0.220' `
+     -EnableLegacyInfoCheckerPatch `
+     -WhatIf
+   ```
+
+6. 如果预览没有报版本或哈希错误，原样再次执行，并删除最后一行的 `-WhatIf`。这一个命令会同时完成三件事：
+
+   - 将已验证的 TM2425 `wtsapi32.dll` 放入版本根目录；
+   - 将同一文件放入 `app` 子目录；
+   - 备份原版 `XiaoaiHost.dll`，再安装 3.5.0.220 专用补丁，阻止环境检查失败弹窗。
+
+7. 启动超级小爱并验证文件状态：
+
+   ```powershell
+   pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Test-RuntimeCompatibility.ps1' `
+     -Product Xiaoai `
+     -InstallRoot 'C:\Program Files\MI\XiaoaiAgent\3.5.0.220' `
+     -AsJson
+   ```
+
+   输出中的两个 `wtsapi32.dll` 应为 `Matches: True`，`LegacyXiaoaiHost.State` 应为 `PatchedLegacyFile`，最终 `Compatible` 应为 `True`。
+
+`XiaoaiHost.dll` 补丁仓库路径为 `skills\install-xiaomi-hyperconnect\assets\bin\legacy\xiaoai-3.5.0.220\XiaoaiHost.dll`，安装目标为 `C:\Program Files\MI\XiaoaiAgent\3.5.0.220\XiaoaiHost.dll`。脚本只接受原版哈希 `AB5961C45DEA2FF9C46019B3E8E5A88A26DFC745E7C57586B8EB4F2E8C4B9323`，补丁哈希为 `D80F3C3BAE5C028C02208C3B5148ED0F0965F25AF03DFAA135906E5F2A5A0194`，备份位置为 `%ProgramData%\XiaomiHyperConnectCompat\Xiaoai\3.5.0.220\backups\XiaoaiHost.dll`。3.5.0.227 或未知版本不能使用这个补丁。
+
+### AI 与手动操作的区别
+
+AI 不是安装所必需的。普通用户可以照上面的步骤自行复制文件，并把预览、正式安装和验证命令依次粘贴到 PowerShell；AI 只是代替用户完成同样的签名、哈希、备份和验证工作。AI Agent 应完整遵循 [`skills/install-xiaomi-hyperconnect/SKILL.md`](skills/install-xiaomi-hyperconnect/SKILL.md)，不能跳过 `-WhatIf` 或替用户静默确认 UAC。
+
+## 生成两套产品专用 DLL
+
+当前验证配置是电脑管家使用 `TIMI / TM2425`，超级小爱使用 `TIMI / TM2430`。一次生成两套：
+
+```powershell
+pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\New-ProductInstallerBundles.ps1' `
+  -OutputRoot '.\build'
+```
+
+生成目录为：
 
 ```text
-下载目录\
-  官方安装包.exe
-  msimg32.dll
-  wtsapi32.dll
+build\
+  XiaomiPCManager-TM2425\
+    BUNDLE.json
+    msimg32.dll
+    wtsapi32.dll
+    SHA256SUMS.txt
+  SuperXiaoAI-TM2430\
+    BUNDLE.json
+    msimg32.dll
+    wtsapi32.dll
+    SHA256SUMS.txt
 ```
 
-安装结束并关闭安装器后，可以删除安装包旁的两个 DLL。
+`BUNDLE.json` 标记适用产品和 `installer` 用途并纳入校验和，准备脚本会拒绝跨产品使用。这两套目录用于安装器机型检查，不代表对应型号的运行时功能已验证。脚本只生成文件，不会自动安装或修改系统目录。
 
-### 2. 小米电脑管家运行时
-
-将同一对 `msimg32.dll` 和 `wtsapi32.dll` 放到实际版本目录：
-
-```text
-C:\Program Files\MI\XiaomiPCManager\<版本号>\
-```
-
-软件升级通常会创建新的版本目录；升级后需要重新诊断和放置，不要覆盖未知版本文件。
-
-### 3. 超级小爱运行时
-
-只需将同一份 `wtsapi32.dll` 分别放到：
-
-```text
-C:\Program Files\MI\XiaoaiAgent\<版本号>\
-C:\Program Files\MI\XiaoaiAgent\<版本号>\app\
-```
-
-`msimg32.dll` 不需要放进超级小爱运行目录。`XiaoaiHost.dll` 只允许由脚本在版本与原文件哈希都匹配 3.5.0.220 时安装，不要手动复制到其他版本。
-
-## 用脚本自动安装和回滚
-
-需要 PowerShell 7。先克隆或下载仓库。
-
-### 准备官方安装器
-
-先用 `-WhatIf` 预览，再执行并启动安装器：
-
-```powershell
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Prepare-OfficialInstaller.ps1' `
-  -Product PcManager `
-  -InstallerPath 'D:\下载\XiaomiPCManager\官方安装包.exe' `
-  -WhatIf
-
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Prepare-OfficialInstaller.ps1' `
-  -Product PcManager `
-  -InstallerPath 'D:\下载\XiaomiPCManager\官方安装包.exe' `
-  -Launch
-```
-
-超级小爱将 `-Product` 改为 `Xiaoai`。
-
-### 安装运行时兼容文件
-
-以管理员身份打开 PowerShell 7：
-
-```powershell
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Install-RuntimeCompatibility.ps1' -Product PcManager
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Install-RuntimeCompatibility.ps1' -Product Xiaoai
-```
-
-如果且仅如果超级小爱 3.5.0.220 仍显示“组件加载异常”，才可执行：
-
-```powershell
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Install-RuntimeCompatibility.ps1' `
-  -Product Xiaoai `
-  -EnableLegacyInfoCheckerPatch
-```
-
-官网 3.5.0.227 不满足旧补丁条件，脚本会拒绝替换 `XiaoaiHost.dll`。
-
-### 验证与回滚
-
-```powershell
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Test-RuntimeCompatibility.ps1' -Product PcManager
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Test-RuntimeCompatibility.ps1' -Product Xiaoai
-```
-
-回滚需要管理员权限：
-
-```powershell
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Remove-RuntimeCompatibility.ps1' -Product PcManager
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Remove-RuntimeCompatibility.ps1' -Product Xiaoai
-```
-
-清理安装包旁的兼容文件：
-
-```powershell
-pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Remove-InstallerCompatibility.ps1' `
-  -InstallerPath 'D:\下载\XiaomiPCManager\官方安装包.exe'
-```
-
-回滚脚本只处理哈希完全匹配的文件。3.5.0.220 原版 `XiaoaiHost.dll` 会备份到 `%ProgramData%\XiaomiHyperConnectCompat\backups` 后再替换。
-
-## 生成指定机型的 DLL
-
-默认 DLL 使用 `TIMI / TM2425`。如果需要其他六位 `TMxxxx` 型号，例如 `TM2430`：
+如需研究其他六位 `TMxxxx`，仍可使用高级自定义生成器，并通过 `-Product` 标记目标产品：
 
 ```powershell
 pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\New-ModelCompatibilityBundle.ps1' `
+  -Product Xiaoai `
   -ModelCode TM2430 `
-  -OutputDirectory '.\generated\TM2430'
+  -OutputDirectory '.\generated\Xiaoai-TM2430'
 ```
 
-生成目录包含：
+生成器从已校验的 TM2425 Hook 精确替换唯一一个 UTF-16LE 机型标记，保持 PE 文件长度不变，并为结果生成新 SHA-256。生成的 DLL 仍是未签名兼容层；自定义机型只改变模拟型号，不代表该机型或全部硬件功能已经验证。
 
-```text
-generated\TM2430\
-  msimg32.dll
-  wtsapi32.dll
-  SHA256SUMS.txt
-```
-
-脚本从已校验的 TM2425 Hook 精确替换唯一一个 UTF-16LE 机型标记，保持 PE 文件长度不变，并为结果生成新 SHA-256。它不会自动安装，也不会修改仓库内置文件。生成的 DLL 仍是未签名兼容层；自定义机型只改变模拟型号，不代表该机型或全部硬件功能已经验证。
+生成完成后，普通用户按前面的手动教程把对应目录中的两个 DLL 放到安装器旁；AI Agent 则把该目录传给 `Prepare-OfficialInstaller.ps1 -BundleDirectory`。不要仅把 DLL 留在生成目录后直接运行其他目录中的安装器。
 
 如需从源码重新构建通用的 `msimg32.dll` 代理，可在 x64 GCC/MSYS2 UCRT64 环境运行：
 

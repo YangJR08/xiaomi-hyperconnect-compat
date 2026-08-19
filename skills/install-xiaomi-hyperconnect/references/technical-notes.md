@@ -5,6 +5,7 @@
 - [Support boundary](#support-boundary)
 - [Installer loading chain](#installer-loading-chain)
 - [Model hook](#model-hook)
+- [Product profiles](#product-profiles)
 - [Super XiaoAI runtime](#super-xiaoai-runtime)
 - [Legacy InfoChecker patch](#legacy-infochecker-patch)
 - [Diagnostic workflow](#diagnostic-workflow)
@@ -17,6 +18,12 @@ and Super XiaoAI 3.5.0.220. On 2026-08-17 Xiaomi's official HyperConnect
 page exposed Super XiaoAI 3.5.0.227. The common model hook may continue to
 work, but the legacy `XiaoaiHost.dll` artifact is not compatible by inference.
 Require explicit version and original-hash support before patching it.
+
+Product-specific installer testing on 2026-08-19 found that the generated
+`TM2430` hook passed the Super XiaoAI installer but did not pass the Xiaomi PC
+Manager installer on the tested system. The `TM2425` hook did pass Xiaomi PC
+Manager. Treat these as separate product profiles rather than assuming a
+higher model number is universally accepted.
 
 The compatibility layer is intended for Xiaomi device-interconnection
 features. Do not treat OEM-specific performance modes, drivers, firmware,
@@ -59,6 +66,21 @@ an accidental broad binary replacement.
 
 The hook is unsigned and its upstream source/license could not be recovered.
 Do not describe it as original source from this repository.
+
+## Product profiles
+
+The generated release candidates are intentionally split:
+
+```text
+XiaomiPCManager-TM2425  -> product PcManager, model TM2425
+SuperXiaoAI-TM2430      -> product Xiaoai, model TM2430
+```
+
+Each product directory includes `BUNDLE.json` with `purpose: installer`. Its
+purpose, product, and model fields are covered by `SHA256SUMS.txt`; installer
+preparation rejects a product mismatch. Generic custom-model generation remains
+available for research, but it is not evidence that another Xiaomi product or
+the installed runtime accepts that model.
 
 ## Super XiaoAI runtime
 
@@ -103,6 +125,12 @@ installer script requires all of the following:
 - bundled patched SHA-256 is
   `D80F3C3BAE5C028C02208C3B5148ED0F0965F25AF03DFAA135906E5F2A5A0194`;
 - a verified original backup is created before replacement.
+
+The patched repository asset is
+`assets/bin/legacy/xiaoai-3.5.0.220/XiaoaiHost.dll`; the installed destination
+is `<Xiaoai 3.5.0.220 root>\XiaoaiHost.dll`. It is deliberately excluded from
+the product installer bundles. Do not document direct manual replacement;
+human users should run the same guarded runtime installation script as an AI.
 
 Do not weaken these checks to support another version. Analyze the new
 assembly and add a separate manifest entry and test instead.

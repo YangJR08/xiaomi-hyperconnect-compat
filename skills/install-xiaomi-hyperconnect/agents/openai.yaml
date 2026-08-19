@@ -1,4 +1,4 @@
 interface:
   display_name: "小米跨端智联安装与 DLL 生成"
-  short_description: "让 AI 从官网安装、诊断或生成指定机型的小米兼容 DLL"
-  default_prompt: "Use $install-xiaomi-hyperconnect to install Xiaomi HyperConnect software from the official site or generate a custom TMxxxx compatibility DLL bundle."
+  short_description: "让 AI 从官网安装、诊断或生成产品专用的小米兼容 DLL"
+  default_prompt: "Use $install-xiaomi-hyperconnect to install Xiaomi HyperConnect software from the official site, or generate and validate the separate Xiaomi PC Manager TM2425 and Super XiaoAI TM2430 installer bundles."

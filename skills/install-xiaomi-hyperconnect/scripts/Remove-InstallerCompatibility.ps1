@@ -2,16 +2,28 @@
 param(
     [Parameter(Mandatory)]
     [ValidateScript({ Test-Path -LiteralPath $_ -PathType Leaf })]
-    [string]$InstallerPath
+    [string]$InstallerPath,
+
+    [ValidateScript({ Test-Path -LiteralPath $_ -PathType Container })]
+    [string]$BundleDirectory
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Compatibility.Common.ps1')
 
 $installer = Get-Item -LiteralPath $InstallerPath
+$bundle = if ($BundleDirectory) {
+    Get-CompatGeneratedBundle -Directory $BundleDirectory
+}
+else {
+    [pscustomobject]@{
+        ProxySHA256 = [string](Get-CompatArtifact -Name 'msimg32_proxy').sha256
+        HookSHA256 = [string](Get-CompatArtifact -Name 'model_hook_tm2425').sha256
+    }
+}
 $files = @(
-    [pscustomobject]@{ Name = 'msimg32.dll'; Artifact = 'msimg32_proxy' },
-    [pscustomobject]@{ Name = 'wtsapi32.dll'; Artifact = 'model_hook_tm2425' }
+    [pscustomobject]@{ Name = 'msimg32.dll'; SHA256 = $bundle.ProxySHA256 },
+    [pscustomobject]@{ Name = 'wtsapi32.dll'; SHA256 = $bundle.HookSHA256 }
 )
 
 foreach ($entry in $files) {
@@ -20,9 +32,8 @@ foreach ($entry in $files) {
         [pscustomobject]@{ File = $path; Status = 'Absent' }
         continue
     }
-    $expected = [string](Get-CompatArtifact -Name $entry.Artifact).sha256
     $actual = Get-Sha256 -Path $path
-    if ($actual -ne $expected) {
+    if ($actual -ne $entry.SHA256) {
         throw "Refusing to remove an unexpected installer-side file: $path ($actual)"
     }
     if ($PSCmdlet.ShouldProcess($path, 'Remove verified installer compatibility file')) {

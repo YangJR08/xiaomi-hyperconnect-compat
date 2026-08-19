@@ -49,6 +49,148 @@ function Assert-CompatArtifact {
     $path
 }
 
+function Find-CompatByteSequence {
+    param(
+        [Parameter(Mandatory)][byte[]]$Data,
+        [Parameter(Mandatory)][byte[]]$Needle
+    )
+
+    for ($offset = 0; $offset -le $Data.Length - $Needle.Length; $offset++) {
+        $matches = $true
+        for ($index = 0; $index -lt $Needle.Length; $index++) {
+            if ($Data[$offset + $index] -ne $Needle[$index]) {
+                $matches = $false
+                break
+            }
+        }
+        if ($matches) { $offset }
+    }
+}
+
+function Test-CompatByteArrayEqual {
+    param(
+        [Parameter(Mandatory)][byte[]]$Left,
+        [Parameter(Mandatory)][byte[]]$Right
+    )
+
+    if ($Left.Length -ne $Right.Length) { return $false }
+    for ($index = 0; $index -lt $Left.Length; $index++) {
+        if ($Left[$index] -ne $Right[$index]) { return $false }
+    }
+    $true
+}
+
+function Get-CompatGeneratedBundle {
+    param([Parameter(Mandatory)][string]$Directory)
+
+    $resolvedDirectory = [IO.Path]::GetFullPath($Directory).TrimEnd('\')
+    if (-not (Test-Path -LiteralPath $resolvedDirectory -PathType Container)) {
+        throw "Compatibility bundle directory does not exist: $resolvedDirectory"
+    }
+
+    $proxyPath = Join-Path $resolvedDirectory 'msimg32.dll'
+    $hookPath = Join-Path $resolvedDirectory 'wtsapi32.dll'
+    $checksumPath = Join-Path $resolvedDirectory 'SHA256SUMS.txt'
+    foreach ($requiredPath in @($proxyPath, $hookPath, $checksumPath)) {
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Compatibility bundle is missing a required file: $requiredPath"
+        }
+    }
+
+    $proxyArtifact = Get-CompatArtifact -Name 'msimg32_proxy'
+    $proxyHash = Get-Sha256 -Path $proxyPath
+    if ($proxyHash -ne [string]$proxyArtifact.sha256) {
+        throw "Compatibility bundle proxy hash mismatch: $proxyPath ($proxyHash)"
+    }
+    if ((Get-Item -LiteralPath $proxyPath).Length -ne [int64]$proxyArtifact.size) {
+        throw "Compatibility bundle proxy size mismatch: $proxyPath"
+    }
+
+    $baseHookPath = Assert-CompatArtifact -Name 'model_hook_tm2425'
+    $baseHookBytes = [IO.File]::ReadAllBytes($baseHookPath)
+    $hookBytes = [IO.File]::ReadAllBytes($hookPath)
+    if ($hookBytes.Length -ne $baseHookBytes.Length) {
+        throw "Compatibility bundle hook size mismatch: $hookPath"
+    }
+
+    $baseToken = [Text.Encoding]::Unicode.GetBytes('TM2425')
+    $baseTokenHits = @(Find-CompatByteSequence -Data $baseHookBytes -Needle $baseToken)
+    if ($baseTokenHits.Count -ne 1) {
+        throw "Verified base hook must contain exactly one TM2425 token; found $($baseTokenHits.Count)."
+    }
+
+    $tokenOffset = $baseTokenHits[0]
+    $modelCode = [Text.Encoding]::Unicode.GetString($hookBytes, $tokenOffset, $baseToken.Length)
+    if ($modelCode -notmatch '^TM\d{4}$') {
+        throw "Compatibility bundle contains an invalid model token at the verified offset: $modelCode"
+    }
+
+    $expectedHookBytes = [byte[]]::new($baseHookBytes.Length)
+    [Array]::Copy($baseHookBytes, $expectedHookBytes, $baseHookBytes.Length)
+    $modelToken = [Text.Encoding]::Unicode.GetBytes($modelCode)
+    [Array]::Copy($modelToken, 0, $expectedHookBytes, $tokenOffset, $modelToken.Length)
+    if (-not (Test-CompatByteArrayEqual -Left $hookBytes -Right $expectedHookBytes)) {
+        throw "Compatibility bundle hook differs from the verified base outside the model token: $hookPath"
+    }
+
+    $hookHash = Get-Sha256 -Path $hookPath
+    $bundleManifestPath = Join-Path $resolvedDirectory 'BUNDLE.json'
+    $bundleProduct = $null
+    if (Test-Path -LiteralPath $bundleManifestPath -PathType Leaf) {
+        try {
+            $bundleManifest = Get-Content -LiteralPath $bundleManifestPath -Raw | ConvertFrom-Json
+        }
+        catch {
+            throw "Compatibility bundle metadata is not valid JSON: $bundleManifestPath"
+        }
+        if ($bundleManifest.schema_version -ne 1 -or
+            [string]$bundleManifest.purpose -ne 'installer' -or
+            [string]$bundleManifest.product -notin @('PcManager', 'Xiaoai') -or
+            [string]$bundleManifest.model_code -ne $modelCode) {
+            throw "Compatibility bundle metadata does not match its validated model: $bundleManifestPath"
+        }
+        $bundleProduct = [string]$bundleManifest.product
+    }
+
+    $checksumEntries = @{}
+    foreach ($line in Get-Content -LiteralPath $checksumPath) {
+        if ($line -notmatch '^([0-9A-Fa-f]{64})\s+([^\\/]+)$') {
+            throw "Invalid SHA256SUMS entry in compatibility bundle: $line"
+        }
+        $fileName = $Matches[2].ToLowerInvariant()
+        if ($checksumEntries.ContainsKey($fileName)) {
+            throw "Duplicate SHA256SUMS entry in compatibility bundle: $fileName"
+        }
+        $checksumEntries[$fileName] = $Matches[1].ToUpperInvariant()
+    }
+    $expectedChecksumNames = @('msimg32.dll', 'wtsapi32.dll')
+    if ($bundleProduct) { $expectedChecksumNames += 'bundle.json' }
+    if ($checksumEntries.Count -ne $expectedChecksumNames.Count -or
+        @($expectedChecksumNames | Where-Object { -not $checksumEntries.ContainsKey($_) }).Count -ne 0) {
+        throw "Compatibility bundle SHA256SUMS.txt must contain exactly: $($expectedChecksumNames -join ', ')."
+    }
+    if ($checksumEntries['msimg32.dll'] -ne $proxyHash -or
+        $checksumEntries['wtsapi32.dll'] -ne $hookHash) {
+        throw 'Compatibility bundle SHA256SUMS.txt does not match the bundle files.'
+    }
+    if ($bundleProduct -and
+        $checksumEntries['bundle.json'] -ne (Get-Sha256 -Path $bundleManifestPath)) {
+        throw 'Compatibility bundle SHA256SUMS.txt does not match BUNDLE.json.'
+    }
+
+    [pscustomobject]@{
+        Directory = $resolvedDirectory
+        Product = $bundleProduct
+        ModelCode = $modelCode
+        ProxyPath = $proxyPath
+        ProxySHA256 = $proxyHash
+        HookPath = $hookPath
+        HookSHA256 = $hookHash
+        ChecksumPath = $checksumPath
+        BundleManifestPath = if ($bundleProduct) { $bundleManifestPath } else { $null }
+    }
+}
+
 function Get-CompatProduct {
     param([Parameter(Mandatory)][ValidateSet('PcManager', 'Xiaoai')][string]$Product)
 
