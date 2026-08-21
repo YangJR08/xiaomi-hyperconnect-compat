@@ -6,6 +6,8 @@
 - [Installer loading chain](#installer-loading-chain)
 - [Model hook](#model-hook)
 - [Product profiles](#product-profiles)
+- [Runtime WTS proxy](#runtime-wts-proxy)
+- [Uninstaller collision](#uninstaller-collision)
 - [Super XiaoAI runtime](#super-xiaoai-runtime)
 - [Legacy InfoChecker patch](#legacy-infochecker-patch)
 - [Diagnostic workflow](#diagnostic-workflow)
@@ -82,15 +84,74 @@ preparation rejects a product mismatch. Generic custom-model generation remains
 available for research, but it is not evidence that another Xiaomi product or
 the installed runtime accepts that model.
 
+## Runtime WTS proxy
+
+Installer bundles continue to use the model hook directly as `wtsapi32.dll`.
+Installed applications instead use a source-built forwarding layer:
+
+```text
+wtsapi32.dll                         -> guarded runtime proxy
+XiaomiHyperConnectModelHook.dll      -> verified TM2425 model hook
+```
+
+The x64 proxy resolves the genuine `%SystemRoot%\System32\wtsapi32.dll` by
+absolute path and exposes the same 69 named exports as the legacy hook. In
+normal processes it resolves all 69 targets and loads the renamed sibling
+model hook. When the host executable basename is exactly `Uninstall.exe`, it
+resolves only `WTSEnumerateSessionsW`, `WTSFreeMemory`, and
+`WTSQueryUserToken`—the three imports shared by the two verified Xiaomi
+uninstallers—and does not load the model hook. The build smoke test calls
+`WTSEnumerateSessionsW` and `WTSFreeMemory` in both modes.
+
+The `msimg32.dll` proxy has the same process-name guard. Normal installer and
+PC Manager processes still load the sibling WTS layer, while `Uninstall.exe`
+receives only the five System32 `msimg32` forwards.
+
+The build fixes the PE timestamp, preferred image base, and GCC random seed.
+Two clean builds with the same MSYS2 UCRT64 toolchain produced the same proxy
+SHA-256.
+
+## Uninstaller collision
+
+On 2026-08-21 both Xiaomi PC Manager 5.8.1.121 and Super XiaoAI 3.5.0.220
+official uninstallers were found to import `WTSAPI32.dll` directly. The DLL is
+not a Windows KnownDLL on the tested system, so an application-local model hook
+under that name was loaded into the uninstaller before its own code ran.
+
+The Super XiaoAI failure was reproduced with the signed official uninstaller:
+
+```text
+legacy hook present   -> launcher exits; no uninstall UI process remains
+legacy hook removed   -> temporary Uninstall.exe remains with title “超级小爱”
+guarded proxy present -> temporary Uninstall.exe remains with title “超级小爱”
+```
+
+PC Manager 5.8.1.121 was tested independently. Its services and the
+auto-restarted `OSDUtility.exe` had to be stopped because they kept the legacy
+DLL mapped. With the legacy Hook, the signed launcher exited with no remaining
+UI; without the Hook, a temporary uninstaller remained with title “小米电脑管家”.
+An early guarded-proxy build still failed with `0xc0000142` because it performed
+the full 69-export initialization inside this uninstaller. After restricting
+the uninstaller branch to its three actual WTS imports, the same official UI
+opened and the launcher exited with code 0.
+
+Each A/B test stopped the application and related services first, observed for eight seconds, closed
+the temporary uninstaller without confirming removal, restored the exact
+verified legacy hook, and left a backup under `%ProgramData%`. This establishes
+that the old runtime deployment layout—not the registry uninstall command or
+the `XiaoaiHost.dll` patch—caused the silent exit.
+
 ## Super XiaoAI runtime
 
 The actual WMI model query is hosted by `XiaoaiHost.exe` in the version root,
-not only by `app\XiaoaiAgent.exe`. For that reason, the same model hook is
+not only by `app\XiaoaiAgent.exe`. For that reason, the proxy/hook pair is
 needed in both locations:
 
 ```text
 <version>\wtsapi32.dll
+<version>\XiaomiHyperConnectModelHook.dll
 <version>\app\wtsapi32.dll
+<version>\app\XiaomiHyperConnectModelHook.dll
 ```
 
 A successful 3.5.0.220 validation showed the application cache and client
@@ -151,6 +212,8 @@ assembly and add a separate manifest entry and test instead.
 ## Rollback invariants
 
 - Never remove a target whose hash differs from the project manifest.
+- Preflight every target and backup before the first runtime rollback mutation;
+  a missing legacy `XiaoaiHost.dll` backup must not leave a partial rollback.
 - Restore a prior file only when its backup hash equals the recorded prior
   hash.
 - Leave a compatibility file in place when it predated the tracked install.

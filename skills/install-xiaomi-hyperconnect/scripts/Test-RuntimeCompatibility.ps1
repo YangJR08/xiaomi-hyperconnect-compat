@@ -21,6 +21,7 @@ $fileResults = foreach ($target in $targets) {
     $exists = Test-Path -LiteralPath $target.Destination -PathType Leaf
     $actualHash = if ($exists) { Get-Sha256 -Path $target.Destination } else { $null }
     [pscustomobject]@{
+        Artifact = [string]$target.Artifact
         Path = [string]$target.Destination
         Exists = $exists
         SHA256 = $actualHash

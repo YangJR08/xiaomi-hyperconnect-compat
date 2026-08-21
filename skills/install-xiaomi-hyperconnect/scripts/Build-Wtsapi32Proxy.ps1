@@ -8,23 +8,22 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Compatibility.Common.ps1')
 
 if (-not $OutputDirectory) {
-    $OutputDirectory = Join-Path (Get-Location) 'generated\msimg32-proxy'
+    $OutputDirectory = Join-Path (Get-Location) 'generated\wtsapi32-runtime-proxy'
 }
 $resolvedOutput = [IO.Path]::GetFullPath($OutputDirectory).TrimEnd('\')
-$sourceDirectory = Join-Path $script:SkillRoot 'assets\source\msimg32-proxy'
-$proxyDll = Join-Path $resolvedOutput 'msimg32.dll'
-$hookCopy = Join-Path $resolvedOutput 'wtsapi32.dll'
-$testExe = Join-Path $resolvedOutput 'proxy_smoke_test.exe'
-$uninstallerTestExe = Join-Path $resolvedOutput 'Uninstall.exe'
+$sourceDirectory = Join-Path $script:SkillRoot 'assets\source\wtsapi32-proxy'
+$proxyDll = Join-Path $resolvedOutput 'wtsapi32.dll'
+$modelHook = Join-Path $resolvedOutput 'XiaomiHyperConnectModelHook.dll'
+$testExe = Join-Path $resolvedOutput 'wtsapi32_proxy_smoke_test.exe'
 
-foreach ($required in @('msimg32_proxy.c', 'msimg32_proxy.def', 'proxy_smoke_test.c')) {
+foreach ($required in @('wtsapi32_proxy.c', 'wtsapi32_proxy.def', 'wtsapi32_proxy_smoke_test.c')) {
     $path = Join-Path $sourceDirectory $required
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-        throw "Bundled proxy source is missing: $path"
+        throw "Bundled runtime-proxy source is missing: $path"
     }
 }
 if (-not $Force) {
-    foreach ($path in @($proxyDll, $hookCopy, $testExe)) {
+    foreach ($path in @($proxyDll, $modelHook, $testExe)) {
         if (Test-Path -LiteralPath $path) {
             throw "Output already exists. Use a new directory or pass -Force: $path"
         }
@@ -44,37 +43,37 @@ if (-not $gcc) {
     throw 'An x64 GCC toolchain was not found. Install MSYS2 UCRT64 GCC before building the proxy.'
 }
 
-$stageRoot = Join-Path ([IO.Path]::GetTempPath()) "xiaomi-msimg32-build-$([Guid]::NewGuid().ToString('N'))"
+$stageRoot = Join-Path ([IO.Path]::GetTempPath()) "xiaomi-wtsapi32-build-$([Guid]::NewGuid().ToString('N'))"
 $previousSourceDateEpoch = $env:SOURCE_DATE_EPOCH
 try {
     $env:SOURCE_DATE_EPOCH = '0'
     New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
-    Copy-Item -LiteralPath (Join-Path $sourceDirectory 'msimg32_proxy.c'), `
-        (Join-Path $sourceDirectory 'msimg32_proxy.def'), `
-        (Join-Path $sourceDirectory 'proxy_smoke_test.c') -Destination $stageRoot
+    Copy-Item -LiteralPath (Join-Path $sourceDirectory 'wtsapi32_proxy.c'), `
+        (Join-Path $sourceDirectory 'wtsapi32_proxy.def'), `
+        (Join-Path $sourceDirectory 'wtsapi32_proxy_smoke_test.c') -Destination $stageRoot
 
-    $stageProxy = Join-Path $stageRoot 'msimg32.dll'
-    $stageHook = Join-Path $stageRoot 'wtsapi32.dll'
-    $stageTest = Join-Path $stageRoot 'proxy_smoke_test.exe'
+    $stageProxy = Join-Path $stageRoot 'wtsapi32.dll'
+    $stageHook = Join-Path $stageRoot 'XiaomiHyperConnectModelHook.dll'
+    $stageTest = Join-Path $stageRoot 'wtsapi32_proxy_smoke_test.exe'
     $stageUninstallerTest = Join-Path $stageRoot 'Uninstall.exe'
 
     & $gcc -shared -O2 -s -Wall -Wextra -municode `
-        '-frandom-seed=xiaomi-hyperconnect-msimg32' `
+        '-frandom-seed=xiaomi-hyperconnect-wtsapi32' `
         '-Wl,--no-insert-timestamp' `
         '-Wl,--image-base,0x180000000' `
         -o $stageProxy `
-        (Join-Path $stageRoot 'msimg32_proxy.c') `
-        (Join-Path $stageRoot 'msimg32_proxy.def')
-    if ($LASTEXITCODE -ne 0) { throw "Proxy build failed with exit code $LASTEXITCODE." }
+        (Join-Path $stageRoot 'wtsapi32_proxy.c') `
+        (Join-Path $stageRoot 'wtsapi32_proxy.def')
+    if ($LASTEXITCODE -ne 0) { throw "Runtime proxy build failed with exit code $LASTEXITCODE." }
 
-    & $gcc -O2 -s -Wall -Wextra -municode -o $stageTest `
-        (Join-Path $stageRoot 'proxy_smoke_test.c')
+    & $gcc -O2 -s -Wall -Wextra -Wno-cast-function-type -municode -o $stageTest `
+        (Join-Path $stageRoot 'wtsapi32_proxy_smoke_test.c')
     if ($LASTEXITCODE -ne 0) { throw "Smoke-test build failed with exit code $LASTEXITCODE." }
 
     $hookSource = Assert-CompatArtifact -Name 'model_hook_tm2425'
     Copy-Item -LiteralPath $hookSource -Destination $stageHook
     & $stageTest $stageProxy load
-    if ($LASTEXITCODE -ne 0) { throw "Proxy smoke test failed with exit code $LASTEXITCODE." }
+    if ($LASTEXITCODE -ne 0) { throw "Runtime model-hook smoke test failed with exit code $LASTEXITCODE." }
 
     Copy-Item -LiteralPath $stageTest -Destination $stageUninstallerTest
     & $stageUninstallerTest $stageProxy skip
@@ -82,7 +81,7 @@ try {
 
     New-Item -ItemType Directory -Path $resolvedOutput -Force | Out-Null
     Copy-Item -LiteralPath $stageProxy -Destination $proxyDll -Force
-    Copy-Item -LiteralPath $stageHook -Destination $hookCopy -Force
+    Copy-Item -LiteralPath $stageHook -Destination $modelHook -Force
     Copy-Item -LiteralPath $stageTest -Destination $testExe -Force
 }
 finally {
@@ -104,7 +103,7 @@ finally {
     OutputDirectory = $resolvedOutput
     Compiler = $gcc
     ProxySHA256 = (Get-Sha256 -Path $proxyDll)
-    BundledHookSHA256 = (Get-Sha256 -Path $hookCopy)
+    ModelHookSHA256 = (Get-Sha256 -Path $modelHook)
     RuntimeSmokeTest = 'Passed'
     UninstallerBypassSmokeTest = 'Passed'
     Note = 'The build fixes the PE timestamp, preferred image base, and compiler random seed for reproducible output with the same toolchain.'

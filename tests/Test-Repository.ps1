@@ -56,6 +56,34 @@ foreach ($sourceName in $proxySourceFiles) {
         throw "Root and Skill proxy sources differ: $sourceName"
     }
 }
+$msimgProxySourceText = Get-Content -LiteralPath (Join-Path $repoRoot 'src\msimg32-proxy\msimg32_proxy.c') -Raw
+if ($msimgProxySourceText -notmatch 'Uninstall\.exe' -or
+    $msimgProxySourceText -notmatch 'uninstaller bypass active') {
+    throw 'msimg32 proxy source is missing its PC Manager uninstaller bypass.'
+}
+
+$wtsProxySourceFiles = @('wtsapi32_proxy.c', 'wtsapi32_proxy.def', 'wtsapi32_proxy_smoke_test.c')
+foreach ($sourceName in $wtsProxySourceFiles) {
+    $rootSource = if ($sourceName -eq 'wtsapi32_proxy_smoke_test.c') {
+        Join-Path $repoRoot "tests\$sourceName"
+    }
+    else {
+        Join-Path $repoRoot "src\wtsapi32-proxy\$sourceName"
+    }
+    $skillSource = Join-Path $skillRoot "assets\source\wtsapi32-proxy\$sourceName"
+    if (-not (Test-Path -LiteralPath $skillSource -PathType Leaf)) {
+        throw "Missing self-contained Skill runtime-proxy source: $skillSource"
+    }
+    if ((Get-FileHash -LiteralPath $rootSource -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $skillSource -Algorithm SHA256).Hash) {
+        throw "Root and Skill runtime-proxy sources differ: $sourceName"
+    }
+}
+$wtsProxySourceText = Get-Content -LiteralPath (Join-Path $repoRoot 'src\wtsapi32-proxy\wtsapi32_proxy.c') -Raw
+if ($wtsProxySourceText -notmatch 'Uninstall\.exe' -or
+    $wtsProxySourceText -notmatch 'XiaomiHyperConnectModelHook\.dll') {
+    throw 'Runtime proxy source is missing the uninstaller bypass or renamed model-hook routing.'
+}
 
 $artifactResults = foreach ($entry in $manifest.artifacts.PSObject.Properties) {
     $artifact = $entry.Value
@@ -109,6 +137,19 @@ $generationScript = Join-Path $skillRoot 'scripts\New-ModelCompatibilityBundle.p
 $productGenerationScript = Join-Path $skillRoot 'scripts\New-ProductInstallerBundles.ps1'
 $commonScript = Join-Path $skillRoot 'scripts\Compatibility.Common.ps1'
 . $commonScript
+$runtimeTargetRoot = 'C:\compat-runtime-target-test\1.0.0.0'
+$pcRuntimeTargets = @(Get-CompatRuntimeTargets -Product PcManager -InstallRoot $runtimeTargetRoot)
+$xiaoaiRuntimeTargets = @(Get-CompatRuntimeTargets -Product Xiaoai -InstallRoot $runtimeTargetRoot)
+if (($pcRuntimeTargets.Artifact -join ',') -ne
+        'msimg32_proxy,wtsapi32_runtime_proxy,model_hook_tm2425' -or
+    ($xiaoaiRuntimeTargets.Artifact -join ',') -ne
+        'wtsapi32_runtime_proxy,model_hook_tm2425,wtsapi32_runtime_proxy,model_hook_tm2425' -or
+    @($pcRuntimeTargets.Destination + $xiaoaiRuntimeTargets.Destination |
+        Where-Object { $_ -like '*model_hook_tm2425*' }).Count -ne 0 -or
+    @($pcRuntimeTargets.Destination + $xiaoaiRuntimeTargets.Destination |
+        Where-Object { $_ -like '*XiaomiHyperConnectModelHook.dll' }).Count -ne 3) {
+    throw 'Runtime proxy/model-hook target routing is incorrect.'
+}
 $repositoryTestRoot = Join-Path ([IO.Path]::GetTempPath()) "xiaomi-compat-repository-test-$([Guid]::NewGuid().ToString('N'))"
 try {
 $generatedTestDirectory = Join-Path $repositoryTestRoot 'generic-TM2430'
@@ -129,6 +170,69 @@ if ([regex]::Matches($generatedHookText, 'TM2430').Count -ne 1 -or
 }
 if (-not (Test-Path -LiteralPath $generatedChecksums -PathType Leaf)) {
     throw 'Custom model generation did not produce SHA256SUMS.txt.'
+}
+
+$legacyRuntimeRoot = Join-Path $repositoryTestRoot 'legacy-runtime\9.9.9.9'
+$legacyRuntimeApp = Join-Path $legacyRuntimeRoot 'app'
+New-Item -ItemType Directory -Path $legacyRuntimeApp -Force | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $legacyRuntimeRoot 'XiaoaiHost.exe'), [byte[]]@(0))
+[IO.File]::WriteAllBytes((Join-Path $legacyRuntimeApp 'XiaoaiAgent.exe'), [byte[]]@(0))
+$verifiedModelHook = Assert-CompatArtifact -Name 'model_hook_tm2425'
+Copy-Item -LiteralPath $verifiedModelHook -Destination (Join-Path $legacyRuntimeRoot 'wtsapi32.dll')
+Copy-Item -LiteralPath $verifiedModelHook -Destination (Join-Path $legacyRuntimeApp 'wtsapi32.dll')
+$runtimeInstallScript = Join-Path $skillRoot 'scripts\Install-RuntimeCompatibility.ps1'
+$runtimeRemoveScript = Join-Path $skillRoot 'scripts\Remove-RuntimeCompatibility.ps1'
+$runtimeTestScript = Join-Path $skillRoot 'scripts\Test-RuntimeCompatibility.ps1'
+$migrationPlan = @(& $runtimeInstallScript -Product Xiaoai -InstallRoot $legacyRuntimeRoot -WhatIf) |
+    Where-Object { $_.PSObject.Properties['Artifact'] }
+if ($migrationPlan.Count -ne 4 -or
+    @($migrationPlan | Where-Object { -not $_.InstallRequired }).Count -ne 0 -or
+    @($migrationPlan | Where-Object {
+        $_.Artifact -eq 'wtsapi32_runtime_proxy' -and $_.PriorState -ne 'KnownLegacyFile'
+    }).Count -ne 0) {
+    throw 'Legacy runtime layout did not produce the expected proxy migration plan.'
+}
+$null = & $runtimeRemoveScript -Product Xiaoai -InstallRoot $legacyRuntimeRoot -WhatIf
+
+$legacyPcRuntimeRoot = Join-Path $repositoryTestRoot 'legacy-pc-runtime\9.9.9.9'
+New-Item -ItemType Directory -Path $legacyPcRuntimeRoot -Force | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $legacyPcRuntimeRoot 'XiaomiPcManager.exe'), [byte[]]@(0))
+$legacyMsimgHash = [string](Get-CompatArtifact -Name 'msimg32_proxy').known_replaceable_sha256[0]
+if ($legacyMsimgHash -ne '1F51F24406D8689225B1A38166C5A4F54B5542C1465D1BE87B0F39E6AAD0937B') {
+    throw 'The previous msimg32 proxy is missing from the known-replaceable hash list.'
+}
+Copy-Item -LiteralPath (Assert-CompatArtifact -Name 'msimg32_proxy') `
+    -Destination (Join-Path $legacyPcRuntimeRoot 'msimg32.dll')
+Copy-Item -LiteralPath $verifiedModelHook -Destination (Join-Path $legacyPcRuntimeRoot 'wtsapi32.dll')
+$pcMigrationPlan = @(& $runtimeInstallScript -Product PcManager -InstallRoot $legacyPcRuntimeRoot -WhatIf) |
+    Where-Object { $_.PSObject.Properties['Artifact'] }
+if ($pcMigrationPlan.Count -ne 3 -or
+    @($pcMigrationPlan | Where-Object {
+        $_.Artifact -eq 'msimg32_proxy' -and $_.InstallRequired
+    }).Count -ne 0 -or
+    @($pcMigrationPlan | Where-Object {
+        $_.Artifact -eq 'wtsapi32_runtime_proxy' -and
+        $_.PriorState -ne 'KnownLegacyFile'
+    }).Count -ne 0) {
+    throw 'Legacy PC Manager runtime layout did not produce the expected dual-proxy migration plan.'
+}
+
+$newRuntimeRoot = Join-Path $repositoryTestRoot 'new-runtime\9.9.9.9'
+$newRuntimeApp = Join-Path $newRuntimeRoot 'app'
+New-Item -ItemType Directory -Path $newRuntimeApp -Force | Out-Null
+[IO.File]::WriteAllBytes((Join-Path $newRuntimeRoot 'XiaoaiHost.exe'), [byte[]]@(0))
+[IO.File]::WriteAllBytes((Join-Path $newRuntimeApp 'XiaoaiAgent.exe'), [byte[]]@(0))
+$verifiedRuntimeProxy = Assert-CompatArtifact -Name 'wtsapi32_runtime_proxy'
+foreach ($directory in @($newRuntimeRoot, $newRuntimeApp)) {
+    Copy-Item -LiteralPath $verifiedRuntimeProxy -Destination (Join-Path $directory 'wtsapi32.dll')
+    Copy-Item -LiteralPath $verifiedModelHook -Destination (Join-Path $directory 'XiaomiHyperConnectModelHook.dll')
+}
+$runtimeValidation = & $runtimeTestScript -Product Xiaoai -InstallRoot $newRuntimeRoot -AsJson |
+    ConvertFrom-Json
+if (-not $runtimeValidation.Compatible -or
+    @($runtimeValidation.Files).Count -ne 4 -or
+    @($runtimeValidation.Files | Where-Object { -not $_.Matches }).Count -ne 0) {
+    throw 'New runtime proxy/model-hook layout validation failed.'
 }
 
 $validatedBundle = Get-CompatGeneratedBundle -Directory $generatedTestDirectory

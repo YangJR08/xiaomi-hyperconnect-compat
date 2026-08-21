@@ -7,6 +7,13 @@ The MIT License in this repository covers only the newly written source code,
 scripts, tests, and documentation. It does **not** grant rights to the
 following binary artifacts.
 
+The source-built proxies at
+`skills/install-xiaomi-hyperconnect/assets/bin/common/msimg32.dll` and
+`skills/install-xiaomi-hyperconnect/assets/bin/runtime/wtsapi32.dll` are new
+project code covered by the MIT License. The runtime WTS proxy is distinct
+from the model Hook described below, even though installer bundles use the
+same filename for that Hook.
+
 ## `wtsapi32.dll`
 
 - Path: `skills/install-xiaomi-hyperconnect/assets/bin/common/wtsapi32.dll`

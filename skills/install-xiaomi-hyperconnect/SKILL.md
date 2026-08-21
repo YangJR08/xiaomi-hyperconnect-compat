@@ -1,6 +1,6 @@
 ---
 name: install-xiaomi-hyperconnect
-description: Install, diagnose, generate, validate, and roll back Xiaomi PC Manager and Super XiaoAI compatibility DLLs on unsupported Windows PCs. Use when an AI agent needs to obtain Xiaomi HyperConnect software from Xiaomi's official site, handle unsupported-device/model dialogs, safely place msimg32.dll or wtsapi32.dll, generate a custom TIMI/TMxxxx compatibility bundle, build the msimg32 proxy from source, apply the version-locked XiaoaiHost.dll 3.5.0.220 patch, or remove these changes.
+description: Install, diagnose, generate, validate, uninstall, and roll back Xiaomi PC Manager and Super XiaoAI compatibility DLLs on unsupported Windows PCs. Use when an AI agent needs to obtain Xiaomi HyperConnect software from Xiaomi's official site, handle unsupported-device/model dialogs, safely place msimg32.dll or wtsapi32.dll, generate a custom TIMI/TMxxxx compatibility bundle, build either proxy from source, repair an uninstaller blocked by the legacy runtime hook, apply the version-locked XiaoaiHost.dll 3.5.0.220 patch, or remove these changes.
 ---
 
 # Install or Generate Xiaomi HyperConnect Compatibility
@@ -12,6 +12,7 @@ Use this Skill in one of two modes: install verified bundled files, or generate 
 - For installation or repair, follow **Install workflow**.
 - For a requested `TMxxxx` model DLL, follow **Generate workflow**.
 - For a clean rebuild of the generic proxy, follow **Build workflow**.
+- When the official `Uninstall.exe` silently exits, follow **Uninstall workflow**.
 - For a new Xiaomi version or unknown hash, read `references/technical-notes.md` and diagnose. Do not reuse the legacy host patch by assumption.
 
 ## Install workflow
@@ -45,15 +46,32 @@ Run the self-contained source build when the user wants a freshly compiled gener
 pwsh -File '<skill-dir>\scripts\Build-Msimg32Proxy.ps1' -OutputDirectory '<output-dir>'
 ```
 
-Require an x64 GCC toolchain such as MSYS2 UCRT64. The script compiles the proxy and smoke test, copies the verified hook, validates all five exports, and reports hashes. A new build can differ byte-for-byte from the released proxy because of linker metadata.
+Require an x64 GCC toolchain such as MSYS2 UCRT64. The script stages source in an ASCII temporary path, fixes linker metadata for reproducibility with the same toolchain, validates all five exports, verifies that a normal process loads the sibling compatibility layer, and verifies that a process named `Uninstall.exe` skips it. PC Manager runtime deployment must use the current artifact; the v0.3.0 proxy did not contain this guard.
+
+For the runtime WTS proxy that keeps the official uninstaller functional, run:
+
+```powershell
+pwsh -File '<skill-dir>\scripts\Build-Wtsapi32Proxy.ps1' -OutputDirectory '<output-dir>'
+```
+
+This build stages source in an ASCII temporary path for MSYS2 compatibility, fixes build metadata for reproducibility with the same toolchain, validates all 69 legacy exports, verifies that a normal process loads `XiaomiHyperConnectModelHook.dll`, and verifies that a process named `Uninstall.exe` skips the model hook while WTS calls still work.
+
+## Uninstall workflow
+
+1. Diagnose before changing files. Verify that the registered `Uninstall.exe` exists, has a `Valid` Xiaomi signature, and imports `WTSAPI32.dll`.
+2. Run `Install-RuntimeCompatibility.ps1 -WhatIf` for the installed product. A legacy layout will show the old model-hook hash being replaced by `wtsapi32_runtime_proxy` and a renamed `XiaomiHyperConnectModelHook.dll` being added.
+3. Run the runtime installer elevated, then validate all runtime targets. This is an in-place compatibility upgrade; do not manually delete `XiaoaiHost.dll` or an unknown same-name file. For PC Manager the script records, temporarily disables, and restores services whose executable path is inside the selected version directory, because several of them keep the runtime DLL mapped.
+4. Launch the official uninstaller normally. Both guarded proxies avoid the model layer in `Uninstall.exe`; the WTS proxy initializes only the three imports verified in the Xiaomi uninstallers. Windows Settings and direct double-click uninstall remain usable for both products.
+5. If uninstall still fails, stop and collect sanitized process, signature, exit-code, and Application-event evidence. Do not weaken hashes or delete the installation tree manually.
 
 ## Product routing
 
 - Xiaomi PC Manager installer: use both DLLs from the `PcManager/TM2425` installer bundle.
 - Super XiaoAI installer: use both DLLs from the `Xiaoai/TM2430` installer bundle.
-- Runtime deployment remains separately validated: PC Manager uses the manifest's common pair; Super XiaoAI uses only the manifest's `wtsapi32.dll` in the version root and `app` subdirectory. Do not infer runtime support from an installer bundle.
+- Runtime deployment remains separately validated. PC Manager receives `msimg32.dll`, the guarded runtime `wtsapi32.dll` proxy, and `XiaomiHyperConnectModelHook.dll`. Super XiaoAI receives the runtime proxy plus renamed model hook in both the version root and `app` subdirectory. Do not infer runtime support from an installer bundle.
 - `Prepare-OfficialInstaller.ps1` must reject a bundle whose `BUNDLE.json` product differs from `-Product`.
 - Never put `msimg32.dll` into the Super XiaoAI runtime directory.
+- Never copy an installer bundle's model Hook directly to a runtime `wtsapi32.dll` destination. The old layout is proven to prevent Xiaomi's official `Uninstall.exe` from opening; use `Install-RuntimeCompatibility.ps1` to migrate it safely.
 - Apply `-EnableLegacyInfoCheckerPatch` only for 3.5.0.220 with the manifest's exact original `XiaoaiHost.dll` hash. Never force it onto 3.5.0.227 or an unknown version.
 - The patched legacy file is stored at `assets/bin/legacy/xiaoai-3.5.0.220/XiaoaiHost.dll`; it is not an installer-bundle file. Even for a human-driven install, use `Install-RuntimeCompatibility.ps1 -EnableLegacyInfoCheckerPatch` so the script verifies the original hash and creates the recoverable backup. Never instruct the user to copy it over the installed file manually.
 

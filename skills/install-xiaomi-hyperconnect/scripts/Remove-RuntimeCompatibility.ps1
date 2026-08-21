@@ -33,34 +33,28 @@ $includeLegacy = (Test-Path -LiteralPath $legacyPath -PathType Leaf) -and
 $targets = Get-CompatRuntimeTargets -Product $Product -InstallRoot $resolvedRoot `
     -IncludeLegacyInfoCheckerPatch:$includeLegacy
 
-$processNames = if ($Product -eq 'PcManager') {
-    @('XiaomiPcManager', 'XiaomiPcHost')
-}
-else {
-    @('XiaoaiAgent', 'XiaoaiHost', 'XiaomiAISearchBar')
-}
-if (-not $WhatIfPreference) {
-    Get-Process -Name $processNames -ErrorAction SilentlyContinue | Stop-Process -Force
-    Start-Sleep -Milliseconds 800
-}
-
-foreach ($target in $targets) {
+$plan = foreach ($target in $targets) {
     $destination = [string]$target.Destination
     if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
-        [pscustomobject]@{ File = $destination; Status = 'Absent' }
+        [pscustomobject]@{ File = $destination; Action = 'None'; Status = 'Absent' }
         continue
     }
+
     $artifact = Get-CompatArtifact -Name $target.Artifact
     $actualHash = Get-Sha256 -Path $destination
-    if ($actualHash -ne [string]$artifact.sha256) {
-        throw "Refusing to change an unexpected installed file: $destination ($actualHash)"
-    }
-
+    $allowedHashes = @([string]$artifact.sha256) +
+        @(Get-CompatKnownReplaceableHashes -Artifact $artifact)
     $entry = if ($state) {
         $state.entries | Where-Object Destination -eq $destination | Select-Object -First 1
     }
     else {
         $null
+    }
+    if ($entry -and $entry.ExpectedHash) {
+        $allowedHashes += [string]$entry.ExpectedHash
+    }
+    if ($actualHash -notin $allowedHashes) {
+        throw "Refusing to change an unexpected installed file: $destination ($actualHash)"
     }
 
     if ($entry -and $entry.PriorState -in @('OriginalFile', 'KnownLegacyFile')) {
@@ -70,23 +64,90 @@ foreach ($target in $targets) {
         if ((Get-Sha256 -Path $entry.BackupPath) -ne $entry.PriorHash) {
             throw "Backup hash mismatch: $($entry.BackupPath)"
         }
-        if ($PSCmdlet.ShouldProcess($destination, "Restore verified backup $($entry.PriorHash)")) {
-            Copy-Item -LiteralPath $entry.BackupPath -Destination $destination -Force
-            [pscustomobject]@{ File = $destination; Status = 'Restored'; SHA256 = $entry.PriorHash }
+        [pscustomobject]@{
+            File = $destination
+            Action = 'Restore'
+            Status = 'Restored'
+            BackupPath = [string]$entry.BackupPath
+            SHA256 = [string]$entry.PriorHash
         }
     }
     elseif ($entry -and $entry.PriorState -eq 'PreExistingCompatible') {
-        [pscustomobject]@{ File = $destination; Status = 'LeftInPlace'; SHA256 = $actualHash }
+        [pscustomobject]@{ File = $destination; Action = 'None'; Status = 'LeftInPlace'; SHA256 = $actualHash }
     }
     elseif ($target.Artifact -eq 'xiaoai_host_3_5_0_220') {
         throw "Refusing to remove legacy XiaoaiHost.dll without its verified original backup: $destination"
     }
-    elseif ($PSCmdlet.ShouldProcess($destination, 'Remove verified compatibility file')) {
-        Remove-Item -LiteralPath $destination
-        [pscustomobject]@{ File = $destination; Status = 'Removed' }
+    else {
+        [pscustomobject]@{ File = $destination; Action = 'Remove'; Status = 'Removed'; SHA256 = $actualHash }
     }
 }
 
-if ($state -and -not $WhatIfPreference -and $PSCmdlet.ShouldProcess($statePath, 'Remove completed installation state')) {
-    Remove-Item -LiteralPath $statePath
+$results = @()
+if ($WhatIfPreference) {
+    foreach ($entry in $plan) {
+        if ($entry.Action -eq 'Restore') {
+            if ($PSCmdlet.ShouldProcess($entry.File, "Restore verified backup $($entry.SHA256)")) {}
+        }
+        elseif ($entry.Action -eq 'Remove') {
+            if ($PSCmdlet.ShouldProcess($entry.File, 'Remove verified compatibility file')) {}
+        }
+        else {
+            $results += $entry | Select-Object File, Status, SHA256
+        }
+    }
+    $results
+    return
 }
+
+$serviceSnapshot = @(Suspend-CompatRuntime -InstallRoot $resolvedRoot)
+try {
+    foreach ($entry in $plan) {
+        if ($entry.Action -eq 'Restore') {
+            if ($PSCmdlet.ShouldProcess($entry.File, "Restore verified backup $($entry.SHA256)")) {
+                foreach ($attempt in 1..20) {
+                    Stop-CompatProcessesInRoot -InstallRoot $resolvedRoot
+                    try {
+                        Copy-Item -LiteralPath $entry.BackupPath -Destination $entry.File -Force -ErrorAction Stop
+                        break
+                    }
+                    catch {
+                        if ($attempt -eq 20) { throw }
+                        Start-Sleep -Milliseconds 100
+                    }
+                }
+                if ((Get-Sha256 -Path $entry.File) -ne $entry.SHA256) {
+                    throw "Restored file verification failed: $($entry.File)"
+                }
+                $results += $entry | Select-Object File, Status, SHA256
+            }
+        }
+        elseif ($entry.Action -eq 'Remove') {
+            if ($PSCmdlet.ShouldProcess($entry.File, 'Remove verified compatibility file')) {
+                foreach ($attempt in 1..20) {
+                    Stop-CompatProcessesInRoot -InstallRoot $resolvedRoot
+                    try {
+                        Remove-Item -LiteralPath $entry.File -ErrorAction Stop
+                        break
+                    }
+                    catch {
+                        if ($attempt -eq 20) { throw }
+                        Start-Sleep -Milliseconds 100
+                    }
+                }
+                $results += $entry | Select-Object File, Status
+            }
+        }
+        else {
+            $results += $entry | Select-Object File, Status, SHA256
+        }
+    }
+
+    if ($state -and $PSCmdlet.ShouldProcess($statePath, 'Remove completed installation state')) {
+        Remove-Item -LiteralPath $statePath
+    }
+}
+finally {
+    Resume-CompatRuntime -Services $serviceSnapshot
+}
+$results

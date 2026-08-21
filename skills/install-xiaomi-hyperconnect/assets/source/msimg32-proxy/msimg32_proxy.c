@@ -6,7 +6,9 @@
  *
  * The new installer loads msimg32.dll but no longer imports wtsapi32.dll.
  * This proxy forwards every public msimg32 export to the genuine System32
- * library and explicitly loads the existing sibling wtsapi32.dll model hook.
+ * library and explicitly loads the sibling wtsapi32.dll compatibility layer.
+ * Installer bundles use the model hook directly under that name; runtime
+ * deployment uses the guarded WTS proxy, which then loads the renamed hook.
  */
 
 static HMODULE g_self;
@@ -39,6 +41,20 @@ static BOOL append_filename(wchar_t *path, DWORD capacity, const wchar_t *filena
     return lstrcatW(path, filename) != NULL;
 }
 
+static BOOL is_official_uninstaller_process(void)
+{
+    wchar_t process_path[MAX_PATH];
+    wchar_t *base_name;
+    DWORD length = GetModuleFileNameW(NULL, process_path, ARRAYSIZE(process_path));
+
+    if (length == 0 || length >= ARRAYSIZE(process_path)) {
+        return FALSE;
+    }
+    base_name = wcsrchr(process_path, L'\\');
+    base_name = base_name ? base_name + 1 : process_path;
+    return _wcsicmp(base_name, L"Uninstall.exe") == 0;
+}
+
 static BOOL CALLBACK initialize_proxy(PINIT_ONCE once, PVOID parameter, PVOID *context)
 {
     wchar_t real_path[MAX_PATH];
@@ -69,6 +85,17 @@ static BOOL CALLBACK initialize_proxy(PINIT_ONCE once, PVOID parameter, PVOID *c
     if (!g_alpha_blend || !g_gradient_fill || !g_transparent_blt ||
         !g_dll_initialize || !g_vset_ddrawflag) {
         return FALSE;
+    }
+
+    /*
+     * Xiaomi PC Manager's official uninstaller imports msimg32.dll as well as
+     * wtsapi32.dll. Loading the model layer from here would defeat the WTS
+     * proxy's uninstaller guard and can make the signed uninstaller fail with
+     * STATUS_DLL_INIT_FAILED (0xc0000142).
+     */
+    if (is_official_uninstaller_process()) {
+        OutputDebugStringW(L"Xiaomi msimg32 proxy: uninstaller bypass active");
+        return TRUE;
     }
 
     length = GetModuleFileNameW(g_self, hook_path, ARRAYSIZE(hook_path));

@@ -30,7 +30,7 @@ skills/install-xiaomi-hyperconnect/
 - 从小米官网获取安装包并验证 Xiaomi 数字签名；
 - 准备安装器目录、安装运行时 DLL、验证结果和回滚；
 - 一次生成电脑管家 `TM2425` 和超级小爱 `TM2430` 两套产品专用 bundle，或按指定 `TMxxxx` 生成高级自定义 bundle；
-- 从仓库内置源码重新编译 `msimg32.dll` 代理；
+- 从仓库内置源码重新编译带卸载器旁路的 `msimg32.dll` 代理和运行时 `wtsapi32.dll` 代理；
 - 区分电脑管家、超级小爱和仅限 3.5.0.220 的旧版补丁边界。
 
 Codex 可以把该目录安装为个人 Skill 后用 `$install-xiaomi-hyperconnect` 调用。其他 AI Agent 如果兼容 Codex/OpenAI Skill 目录，也可以直接导入；不兼容自动导入时，让它完整阅读 [`SKILL.md`](skills/install-xiaomi-hyperconnect/SKILL.md) 即可。仓库根目录的 [`AGENTS.md`](AGENTS.md) 也会提示支持该约定的 Agent 自动读取这份 Skill。
@@ -66,12 +66,14 @@ Codex 可以把该目录安装为个人 Skill 后用 `$install-xiaomi-hyperconne
 - “非常抱歉暂不支持该机型”；
 - 超级小爱 3.5.0.220 的“组件加载异常，请检测您的运行环境”。
 
-仓库包含三个兼容文件：
+仓库包含以下兼容文件；同名的 `wtsapi32.dll` 在安装器 bundle 与运行目录中作用不同，不能手工混用：
 
 | 文件 | 用途 | 范围 |
 | --- | --- | --- |
-| `msimg32.dll` | 转发系统图形接口并加载同目录的机型 Hook | 电脑管家/超级小爱安装器；电脑管家运行时 |
-| `wtsapi32.dll` | 将相关 WMI 主板查询结果覆盖为 `TIMI / TM2425`，也可生成其他等长 `TMxxxx` 版本 | 两款软件的安装与运行时 |
+| `msimg32.dll` | 转发系统图形接口；普通进程加载同目录的 WTS 兼容层，`Uninstall.exe` 跳过兼容层 | 电脑管家/超级小爱安装器；电脑管家运行时 |
+| 安装器 bundle 中的 `wtsapi32.dll` | 将相关 WMI 主板查询结果覆盖为所选 `TIMI / TMxxxx` | 只放在对应官方安装包旁 |
+| 运行时 `wtsapi32.dll` | 将 WTS API 转发到 System32；普通进程加载改名后的型号 Hook，`Uninstall.exe` 跳过 Hook | 只能由运行时脚本部署 |
+| `XiaomiHyperConnectModelHook.dll` | 运行时使用的 TM2425 型号 Hook | 与运行时代理成对部署，不能单独改名或复制 |
 | [`XiaoaiHost.dll`](skills/install-xiaomi-hyperconnect/assets/bin/legacy/xiaoai-3.5.0.220/XiaoaiHost.dll) | 屏蔽 3.5.0.220 的 `InfoCheckerService.OnFail()` 失败路径 | **只能用于超级小爱 3.5.0.220，且只能通过校验脚本安装** |
 
 所有仓库内置发布文件的 SHA-256 见 [`checksums.sha256`](checksums.sha256)。
@@ -85,13 +87,17 @@ Codex 可以把该目录安装为个人 Skill 后用 `$install-xiaomi-hyperconne
 1. 新建一个只放电脑管家安装文件的目录。
 2. 将官方安装包以及下载并解压后的 `XiaomiPCManager-TM2425` 中的 `msimg32.dll`、`wtsapi32.dll` 放在同一目录；从源码生成时，对应目录是 `build\XiaomiPCManager-TM2425`。
 3. 运行官方安装包；安装完成并关闭安装器后，可删除安装包旁的两个 DLL。
-4. 完全退出电脑管家，把清单内 TM2425 的同一对运行时 DLL 放入实际版本目录：
+4. 完全退出电脑管家，以管理员身份打开 PowerShell 7，进入仓库根目录，先预览运行时部署：
 
-   ```text
-   C:\Program Files\MI\XiaomiPCManager\<版本号>\
+   ```powershell
+   pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Install-RuntimeCompatibility.ps1' `
+     -Product PcManager `
+     -WhatIf
    ```
 
-   不要覆盖哈希未知的同名文件。软件升级创建新版本目录后需要重新检查。
+5. 预览没有哈希或路径错误后，原样再次执行并删除 `-WhatIf`。脚本会部署 `msimg32.dll`、运行时 `wtsapi32.dll` 和 `XiaomiHyperConnectModelHook.dll`，同时备份允许替换的旧兼容文件。不要把安装器 bundle 中的 `wtsapi32.dll` 直接复制进运行目录。
+
+软件升级创建新版本目录后需要重新检查。
 
 ### 超级小爱 3.5.0.220：从安装到不再弹“组件加载异常”
 
@@ -109,10 +115,10 @@ Codex 可以把该目录安装为个人 Skill 后用 `$install-xiaomi-hyperconne
      -WhatIf
    ```
 
-6. 如果预览没有报版本或哈希错误，原样再次执行，并删除最后一行的 `-WhatIf`。这一个命令会同时完成三件事：
+6. 如果预览没有报版本或哈希错误，原样再次执行，并删除最后一行的 `-WhatIf`。这一个命令会完成：
 
-   - 将已验证的 TM2425 `wtsapi32.dll` 放入版本根目录；
-   - 将同一文件放入 `app` 子目录；
+   - 将源码可审计的运行时 `wtsapi32.dll` 代理放入版本根目录和 `app` 子目录；
+   - 将已验证的 TM2425 Hook 改名为 `XiaomiHyperConnectModelHook.dll`，分别与两个代理成对放置；
    - 备份原版 `XiaoaiHost.dll`，再安装 3.5.0.220 专用补丁，阻止环境检查失败弹窗。
 
 7. 启动超级小爱并验证文件状态：
@@ -124,9 +130,17 @@ Codex 可以把该目录安装为个人 Skill 后用 `$install-xiaomi-hyperconne
      -AsJson
    ```
 
-   输出中的两个 `wtsapi32.dll` 应为 `Matches: True`，`LegacyXiaoaiHost.State` 应为 `PatchedLegacyFile`，最终 `Compatible` 应为 `True`。
+   输出中的四个运行时文件应为 `Matches: True`，`LegacyXiaoaiHost.State` 应为 `PatchedLegacyFile`，最终 `Compatible` 应为 `True`。
 
 `XiaoaiHost.dll` 补丁仓库路径为 `skills\install-xiaomi-hyperconnect\assets\bin\legacy\xiaoai-3.5.0.220\XiaoaiHost.dll`，安装目标为 `C:\Program Files\MI\XiaoaiAgent\3.5.0.220\XiaoaiHost.dll`。脚本只接受原版哈希 `AB5961C45DEA2FF9C46019B3E8E5A88A26DFC745E7C57586B8EB4F2E8C4B9323`，补丁哈希为 `D80F3C3BAE5C028C02208C3B5148ED0F0965F25AF03DFAA135906E5F2A5A0194`，备份位置为 `%ProgramData%\XiaomiHyperConnectCompat\Xiaoai\3.5.0.220\backups\XiaoaiHost.dll`。3.5.0.227 或未知版本不能使用这个补丁。
+
+### 卸载软件
+
+`v0.3.0` 及更早版本把型号 Hook 直接命名为运行目录中的 `wtsapi32.dll`。小米官方 `Uninstall.exe` 也导入这个系统 DLL，因此会误加载型号 Hook 并静默退出。
+
+当前版本同时更新两个源码可审计代理：`msimg32.dll` 在卸载器中不再主动加载兼容层；运行时 `wtsapi32.dll` 对普通小米进程保留完整 69 个导出并加载 `XiaomiHyperConnectModelHook.dll`，对 `Uninstall.exe` 则只初始化两款已验证卸载器实际导入的 3 个系统 WTS 接口，不加载型号 Hook。超级小爱 3.5.0.220 与电脑管家 5.8.1.121 的官方卸载窗口均已分别验证。安装或升级到当前运行时后，可以直接使用 Windows“已安装的应用”或双击官方 `Uninstall.exe`，无需先手工删除 DLL。
+
+旧版兼容文件仍在运行目录时，先按对应产品重新执行一次 `Install-RuntimeCompatibility.ps1 -WhatIf`，确认后去掉 `-WhatIf` 完成原地升级。电脑管家有多个后台服务会占用 DLL，脚本会记录其原启动状态、临时停用、完成哈希校验后按原状态恢复；不要靠任务管理器猜测进程，也不要手工删除或替换 `XiaoaiHost.dll`。
 
 ### AI 与手动操作的区别
 
@@ -172,14 +186,21 @@ pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\New-ModelCompatibilityB
 
 生成完成后，普通用户按前面的手动教程把对应目录中的两个 DLL 放到安装器旁；AI Agent 则把该目录传给 `Prepare-OfficialInstaller.ps1 -BundleDirectory`。不要仅把 DLL 留在生成目录后直接运行其他目录中的安装器。
 
-如需从源码重新构建通用的 `msimg32.dll` 代理，可在 x64 GCC/MSYS2 UCRT64 环境运行：
+如需从源码重新构建通用的 `msimg32.dll` 代理，可在 x64 GCC/MSYS2 UCRT64 环境运行。构建脚本会分别验证普通进程加载兼容层和 `Uninstall.exe` 跳过兼容层：
 
 ```powershell
 pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Build-Msimg32Proxy.ps1' `
   -OutputDirectory '.\build\skill-proxy'
 ```
 
-`wtsapi32.dll` 的完整可重编译源码目前不在仓库中，所以生成器做的是受控机型标记派生，不应描述成从零编译 Hook。它也不会生成可用于任意超级小爱新版的 `XiaoaiHost.dll`。
+运行时 WTS 转发代理也可以从源码构建，并同时测试普通进程加载 Hook、卸载器跳过 Hook 和 WTS API 转发：
+
+```powershell
+pwsh -File '.\skills\install-xiaomi-hyperconnect\scripts\Build-Wtsapi32Proxy.ps1' `
+  -OutputDirectory '.\build\wtsapi32-runtime-proxy'
+```
+
+原始型号 Hook 的完整可重编译源码仍不在仓库中，所以型号生成器做的是受控机型标记派生，不应描述成从零编译 Hook。新加入的运行时代理源码位于 [`src/wtsapi32-proxy`](src/wtsapi32-proxy)。项目也不会生成可用于任意超级小爱新版的 `XiaoaiHost.dll`。
 
 ## 安装或导入 Skill
 
@@ -218,6 +239,20 @@ wtsapi32 Hook fastprox/CWbemObject::Get
 
 旧 Hook 单独放在新版安装器旁不会生效，因为安装器已不再直接加载 `wtsapi32.dll`；`msimg32` 代理恢复了可靠的加载入口。代理源码位于 [`src/msimg32-proxy`](src/msimg32-proxy)，Skill 内也保留一份可独立构建副本。
 
+安装后的运行时加载链与安装器不同：
+
+```text
+电脑管家可先经本地 msimg32.dll；普通进程继续加载 WTS 层
+        ↓
+小米应用加载本地 wtsapi32.dll
+        ↓
+普通进程：转发 69 个导出并加载 XiaomiHyperConnectModelHook.dll
+        ↓
+Uninstall.exe：只初始化已验证的 3 个 WTS 接口并跳过型号 Hook
+        ↓
+电脑管家与超级小爱均正常打开官方卸载界面
+```
+
 超级小爱 3.5.0.220 的第二个弹窗与离线模型无关。该版本的 `InfoCheckerService.OnFail()` 会记录失败并把 `MainHelper.IsLegal` 设为 `false`。旧版补丁只将该方法改为立即返回。详细分析、版本边界和验证指标见 [`technical-notes.md`](skills/install-xiaomi-hyperconnect/references/technical-notes.md)。
 
 ## 兼容性与限制
@@ -232,6 +267,7 @@ wtsapi32 Hook fastprox/CWbemObject::Get
 
 ```powershell
 pwsh -File '.\src\msimg32-proxy\Build-Proxy.ps1'
+pwsh -File '.\src\wtsapi32-proxy\Build-Proxy.ps1'
 pwsh -File '.\tests\Test-Repository.ps1'
 ```
 
@@ -239,4 +275,4 @@ Skill 另外使用官方 `skill-creator` 的 `quick_validate.py` 校验目录结
 
 ## License
 
-新编写的源码、脚本与文档使用 [MIT License](LICENSE)。三个二进制文件不受 MIT 许可覆盖，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+新编写的代理源码、脚本与文档使用 [MIT License](LICENSE)。原始型号 Hook 和修改后的旧版 `XiaoaiHost.dll` 不受 MIT 许可覆盖，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

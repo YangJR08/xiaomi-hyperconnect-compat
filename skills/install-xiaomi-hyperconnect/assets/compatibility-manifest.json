@@ -9,11 +9,26 @@
   "artifacts": {
     "msimg32_proxy": {
       "relative_path": "assets/bin/common/msimg32.dll",
-      "sha256": "1F51F24406D8689225B1A38166C5A4F54B5542C1465D1BE87B0F39E6AAD0937B",
+      "sha256": "6DB5D1951087272009E91D7AFFD89574C786B393B7137D9B93DC518AAEE1384D",
       "size": 15360,
       "machine": "x64",
       "signature_status": "NotSigned",
-      "role": "Forwards all public msimg32 exports to System32 and loads the sibling model hook"
+      "known_replaceable_sha256": [
+        "1F51F24406D8689225B1A38166C5A4F54B5542C1465D1BE87B0F39E6AAD0937B"
+      ],
+      "role": "Forwards all public msimg32 exports to System32; normal processes load the sibling model layer while Uninstall.exe bypasses it"
+    },
+    "wtsapi32_runtime_proxy": {
+      "relative_path": "assets/bin/runtime/wtsapi32.dll",
+      "sha256": "EACBAAEFBF7A62B832923A8B660D4443B617062DD59FAC30DA06251680778C26",
+      "size": 21504,
+      "machine": "x64",
+      "signature_status": "NotSigned",
+      "known_replaceable_sha256": [
+        "8938C3DA6EC67396B353A7B855BE7E706D3BAEEEB80726680A3BE58F60905772",
+        "A505B40E92F65D7F373F58F1DC87114069451201AE34E5F64FB05FD2131001F5"
+      ],
+      "role": "Forwards the legacy WTS export surface to System32, loads the renamed model hook for normal processes, and bypasses it for Uninstall.exe"
     },
     "model_hook_tm2425": {
       "relative_path": "assets/bin/common/wtsapi32.dll",
@@ -41,12 +56,12 @@
     "PcManager": {
       "base_directory": "C:\\Program Files\\MI\\XiaomiPCManager",
       "required_executables": ["XiaomiPcManager.exe"],
-      "runtime_artifacts": ["msimg32_proxy", "model_hook_tm2425"]
+      "runtime_artifacts": ["msimg32_proxy", "wtsapi32_runtime_proxy", "model_hook_tm2425"]
     },
     "Xiaoai": {
       "base_directory": "C:\\Program Files\\MI\\XiaoaiAgent",
       "required_executables": ["XiaoaiHost.exe", "app\\XiaoaiAgent.exe"],
-      "runtime_artifacts": ["model_hook_tm2425"],
+      "runtime_artifacts": ["wtsapi32_runtime_proxy", "model_hook_tm2425"],
       "legacy_info_checker_version": "3.5.0.220"
     }
   }

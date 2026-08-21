@@ -6,7 +6,8 @@ This project intentionally uses application-local DLL loading to run Xiaomi
 software on hardware outside the official support list. Treat all included
 binaries as security-sensitive:
 
-- `msimg32.dll` and `wtsapi32.dll` are unsigned.
+- `msimg32.dll`, the runtime `wtsapi32.dll` proxy, and the renamed model Hook
+  are unsigned.
 - the legacy `XiaoaiHost.dll` has an invalidated Xiaomi signature because it
   was modified after signing;
 - DLL side-loading can also be abused by malware, so never replace these
@@ -16,6 +17,16 @@ binaries as security-sensitive:
 
 Verify every SHA-256 value against `checksums.sha256` before use. The included
 scripts refuse unknown versions and unknown same-name files.
+
+Do not copy an installer bundle's `wtsapi32.dll` directly into an installed
+version directory. The official Xiaomi uninstaller imports that name and the
+legacy model Hook prevents it from opening. Runtime deployment must use the
+guarded proxy plus `XiaomiHyperConnectModelHook.dll`.
+
+PC Manager services and `OSDUtility.exe` can keep the compatibility DLLs
+mapped. Use the bundled install/remove scripts so their original service state
+is recorded and restored; do not delete the installation tree to work around
+a sharing violation.
 
 ## Reporting
 

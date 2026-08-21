@@ -24,6 +24,14 @@ function Get-CompatArtifactPath {
     Join-Path $script:SkillRoot ([string]$artifact.relative_path)
 }
 
+function Get-CompatKnownReplaceableHashes {
+    param([Parameter(Mandatory)]$Artifact)
+
+    $property = $Artifact.PSObject.Properties['known_replaceable_sha256']
+    if (-not $property) { return @() }
+    @($property.Value | ForEach-Object { [string]$_ })
+}
+
 function Get-Sha256 {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -255,6 +263,90 @@ function Test-CompatAdministrator {
     $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
+function Stop-CompatProcessesInRoot {
+    param([Parameter(Mandatory)][string]$InstallRoot)
+
+    Get-CimInstance Win32_Process | Where-Object {
+        $_.ProcessId -ne $PID -and
+        $_.ExecutablePath -and
+        $_.ExecutablePath.StartsWith($InstallRoot, [StringComparison]::OrdinalIgnoreCase)
+    } | ForEach-Object {
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Suspend-CompatRuntime {
+    param([Parameter(Mandatory)][string]$InstallRoot)
+
+    $services = @(Get-CimInstance Win32_Service | Where-Object {
+        $_.PathName -and
+        $_.PathName.IndexOf($InstallRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0
+    } | ForEach-Object {
+        [pscustomobject]@{
+            Name = [string]$_.Name
+            State = [string]$_.State
+            StartMode = [string]$_.StartMode
+            DelayedAutoStart = if ($_.PSObject.Properties['DelayedAutoStart']) {
+                [bool]$_.DelayedAutoStart
+            }
+            else {
+                $false
+            }
+        }
+    })
+
+    try {
+        foreach ($service in $services) {
+            & sc.exe config $service.Name start= disabled | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                throw "Could not temporarily disable service: $($service.Name)"
+            }
+            & sc.exe stop $service.Name | Out-Null
+        }
+        foreach ($attempt in 1..3) {
+            Start-Sleep -Milliseconds 500
+            Stop-CompatProcessesInRoot -InstallRoot $InstallRoot
+        }
+    }
+    catch {
+        Resume-CompatRuntime -Services $services
+        throw
+    }
+    $services
+}
+
+function Resume-CompatRuntime {
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Services)
+
+    $restoreFailures = @()
+    foreach ($service in $Services) {
+        $startValue = if ($service.StartMode -eq 'Auto' -and $service.DelayedAutoStart) {
+            'delayed-auto'
+        }
+        elseif ($service.StartMode -eq 'Auto') {
+            'auto'
+        }
+        elseif ($service.StartMode -eq 'Manual') {
+            'demand'
+        }
+        else {
+            'disabled'
+        }
+        & sc.exe config $service.Name start= $startValue | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            $restoreFailures += [string]$service.Name
+            Write-Warning "Could not restore service startup mode: $($service.Name)"
+            continue
+        }
+        if ($service.State -eq 'Running') {
+            & sc.exe start $service.Name | Out-Null
+        }
+    }
+    if ($restoreFailures.Count -gt 0) {
+        throw "Could not restore service startup mode for: $($restoreFailures -join ', ')"
+    }
+}
+
 function Get-CompatStateDirectory {
     param(
         [Parameter(Mandatory)][ValidateSet('PcManager', 'Xiaoai')][string]$Product,
@@ -274,13 +366,16 @@ function Get-CompatRuntimeTargets {
     if ($Product -eq 'PcManager') {
         return @(
             [pscustomobject]@{ Artifact = 'msimg32_proxy'; Destination = (Join-Path $InstallRoot 'msimg32.dll') },
-            [pscustomobject]@{ Artifact = 'model_hook_tm2425'; Destination = (Join-Path $InstallRoot 'wtsapi32.dll') }
+            [pscustomobject]@{ Artifact = 'wtsapi32_runtime_proxy'; Destination = (Join-Path $InstallRoot 'wtsapi32.dll') },
+            [pscustomobject]@{ Artifact = 'model_hook_tm2425'; Destination = (Join-Path $InstallRoot 'XiaomiHyperConnectModelHook.dll') }
         )
     }
 
     $targets = @(
-        [pscustomobject]@{ Artifact = 'model_hook_tm2425'; Destination = (Join-Path $InstallRoot 'wtsapi32.dll') },
-        [pscustomobject]@{ Artifact = 'model_hook_tm2425'; Destination = (Join-Path $InstallRoot 'app\wtsapi32.dll') }
+        [pscustomobject]@{ Artifact = 'wtsapi32_runtime_proxy'; Destination = (Join-Path $InstallRoot 'wtsapi32.dll') },
+        [pscustomobject]@{ Artifact = 'model_hook_tm2425'; Destination = (Join-Path $InstallRoot 'XiaomiHyperConnectModelHook.dll') },
+        [pscustomobject]@{ Artifact = 'wtsapi32_runtime_proxy'; Destination = (Join-Path $InstallRoot 'app\wtsapi32.dll') },
+        [pscustomobject]@{ Artifact = 'model_hook_tm2425'; Destination = (Join-Path $InstallRoot 'app\XiaomiHyperConnectModelHook.dll') }
     )
     if ($IncludeLegacyInfoCheckerPatch) {
         $targets += [pscustomobject]@{
